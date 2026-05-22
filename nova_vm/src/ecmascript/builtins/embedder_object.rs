@@ -8,51 +8,80 @@ pub(crate) use data::*;
 
 use crate::{
     ecmascript::{
-        InternalMethods, InternalSlots, Object, OrdinaryObject, execution::Agent, object_handle,
+        InternalMethods, InternalSlots, Object, OrdinaryObject, ProtoIntrinsics, execution::Agent,
+        object_handle,
     },
+    engine::Bindable,
     heap::{
-        BaseIndex, CompactionLists, HeapMarkAndSweep, HeapSweepWeakReference, WorkQueues,
-        arena_vec_access,
+        ArenaAccess, ArenaAccessMut, BaseIndex, CompactionLists, HeapMarkAndSweep,
+        HeapSweepWeakReference, WorkQueues, arena_vec_access,
     },
 };
 
-/// Embedder objects are intended for embedders to create objects with native
-/// data embedded into them. The type is currently unimplemented but the
-/// intention will be that each embedder object is always provided with a
-/// backing object reference while the embedder provides the data.
+/// Embedder objects let an embedder create JS objects carrying native data. Each
+/// is backed by an ordinary object (created lazily for property storage) while the
+/// embedder owns the native data — for serval, a `NodeId` bridging the JS reflector
+/// back to the host DOM arena.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct EmbedderObject<'a>(BaseIndex<'a, EmbedderObjectHeapData<'static>>);
 object_handle!(EmbedderObject);
 arena_vec_access!(EmbedderObject, 'a, EmbedderObjectHeapData, embedder_objects);
 
+impl<'a> EmbedderObject<'a> {
+    /// Create an embedder object carrying `embedder_data` (e.g. a serval `NodeId`),
+    /// with no backing object yet (created lazily on first property access).
+    pub fn create_with_data(agent: &mut Agent, embedder_data: u64) -> EmbedderObject<'static> {
+        agent.heap.embedder_objects.push(EmbedderObjectHeapData {
+            backing_object: None,
+            embedder_data,
+        });
+        EmbedderObject(BaseIndex::last(&agent.heap.embedder_objects))
+    }
+
+    /// Read back the embedder-provided native data.
+    pub fn embedder_data(self, agent: &Agent) -> u64 {
+        self.get(agent).embedder_data
+    }
+}
+
 impl<'a> InternalSlots<'a> for EmbedderObject<'a> {
+    const DEFAULT_PROTOTYPE: ProtoIntrinsics = ProtoIntrinsics::Object;
+
     #[inline(always)]
-    fn get_backing_object(self, _agent: &Agent) -> Option<OrdinaryObject<'static>> {
-        todo!();
+    fn get_backing_object(self, agent: &Agent) -> Option<OrdinaryObject<'static>> {
+        self.get(agent).backing_object.unbind()
     }
 
-    fn set_backing_object(self, _agent: &mut Agent, _backing_object: OrdinaryObject<'static>) {
-        todo!();
+    fn set_backing_object(self, agent: &mut Agent, backing_object: OrdinaryObject<'static>) {
+        assert!(
+            self.get_mut(agent)
+                .backing_object
+                .replace(backing_object.unbind())
+                .is_none()
+        );
     }
 
-    fn create_backing_object(self, _agent: &mut Agent) -> OrdinaryObject<'static> {
-        todo!();
-    }
-    fn internal_extensible(self, _agent: &Agent) -> bool {
-        todo!();
-    }
-
-    fn internal_set_extensible(self, _agent: &mut Agent, _value: bool) {
-        todo!();
+    fn create_backing_object(self, agent: &mut Agent) -> OrdinaryObject<'static> {
+        let prototype = self.internal_prototype(agent).unwrap();
+        let backing_object = OrdinaryObject::create_object(agent, Some(prototype), &[])
+            .expect("Should perform GC here")
+            .unbind();
+        self.set_backing_object(agent, backing_object);
+        backing_object
     }
 
-    fn internal_prototype(self, _agent: &Agent) -> Option<Object<'static>> {
-        todo!();
-    }
-
-    fn internal_set_prototype(self, _agent: &mut Agent, _prototype: Option<Object>) {
-        todo!();
+    fn internal_prototype(self, agent: &Agent) -> Option<Object<'static>> {
+        if let Some(backing_object) = self.get_backing_object(agent) {
+            backing_object.internal_prototype(agent)
+        } else {
+            Some(
+                agent
+                    .current_realm_record()
+                    .intrinsics()
+                    .get_intrinsic_default_proto(ProtoIntrinsics::Object),
+            )
+        }
     }
 }
 
