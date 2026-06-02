@@ -522,8 +522,16 @@ pub(crate) fn reg_exp_builtin_exec_prepare<'a>(
     if !global && !sticky {
         last_index = 0;
     }
-    let last_index = if last_index > s.len_(agent) {
-        last_index
+    // `last_index` is a UTF-16 code-unit index (the regex's lastIndex); the
+    // matcher runs over bytes, so convert it to a WTF-8 byte offset. Past the
+    // end of the string there is no offset to map to: bound the conversion by
+    // the UTF-16 length and, when past it, push the value past the *byte* length
+    // so the length guard in `reg_exp_builtin_exec` fails the match. (Comparing
+    // the UTF-16 index against the byte length here let an out-of-range index
+    // through and panicked indexing the UTF-16->byte map — reachable e.g. from a
+    // fullUnicode empty-match `matchAll` advancing lastIndex one past the end.)
+    let last_index = if last_index > s.utf16_len_(agent) {
+        s.len_(agent) + 1
     } else {
         s.utf8_index_(agent, last_index).unwrap_or(last_index)
     };
