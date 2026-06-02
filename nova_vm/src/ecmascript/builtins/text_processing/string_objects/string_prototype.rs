@@ -759,13 +759,10 @@ impl StringPrototype {
         let haystack_str = if pos == usize::MAX {
             s.as_bytes_(agent)
         } else {
-            let end = if pos != 0 {
-                // NOTE: `pos` was already clamped to 0.
-                pos.min(s.utf16_len_(agent))
-            } else {
-                0
-            };
-            let u8_idx = s.utf8_index_(agent, end).unwrap();
+            // `pos` is the end of the prefix S[..pos]. utf8_index_ceil clamps it
+            // to the string and rounds a surrogate split up, so a non-ASCII or
+            // pair-splitting endPosition no longer panics here.
+            let u8_idx = utf8_index_ceil(s, agent, pos);
             &s.as_bytes_(agent)[..u8_idx]
         };
 
@@ -872,12 +869,10 @@ impl StringPrototype {
         // 8. Let len be the length of S.
         // 9. Let start be the result of clamping pos between 0 and len.
         let haystack_str = {
-            let start = if pos != 0 {
-                // NOTE: `pos` was already clamped to 0.
-                pos.min(s.utf16_len_(agent))
-            } else {
-                0
-            };
+            // `pos` is a UTF-16 index; map it to a WTF-8 byte offset. (It was
+            // used directly as a byte index, corrupting/panicking on any
+            // non-ASCII content before the search position.)
+            let start = utf8_index_ceil(s, agent, pos);
             &s.to_string_lossy_(agent)[start..]
         };
 
@@ -957,16 +952,7 @@ impl StringPrototype {
 
         // 6. Let len be the length of S.
         // 7. Let start be the result of clamping pos between 0 and len.
-        let utf8_start = if pos != 0 {
-            let u16_len = s.utf16_len_(agent);
-            if pos >= u16_len {
-                s.len_(agent)
-            } else {
-                s.utf8_index_(agent, pos).unwrap()
-            }
-        } else {
-            0
-        };
+        let utf8_start = utf8_index_ceil(s, agent, pos);
 
         // 8. Let result be StringIndexOf(S, searchStr, start).
         // 9. If result is not-found, return -1𝔽.
@@ -1091,13 +1077,19 @@ impl StringPrototype {
             } else {
                 // When starting from a position, the position may mark the
                 // start of the search string, so we need to include the search
-                // string length in the haystack.
-                let utf8_pos = s.utf8_index_(agent, pos).unwrap();
-                let utf8_len = s.len_(agent);
-                let search_str_len = search_str.len_(agent);
-                s.as_wtf8_(agent)
-                    .slice_to(utf8_len.min(utf8_pos + search_str_len))
-                    .to_string_lossy()
+                // string length in the haystack. `utf8_index_floor` clamps `pos`
+                // to the string and rounds a surrogate split down (a match must
+                // start at <= pos), so an out-of-range or pair-splitting position
+                // no longer panics.
+                let utf8_pos = utf8_index_floor(s, agent, pos);
+                let end = (utf8_pos + search_str.len_(agent)).min(s.len_(agent));
+                // Byte-slice rather than Wtf8::slice_to: `end` may land inside a
+                // multi-byte char, and from_utf8_lossy turns the partial tail
+                // into U+FFFD (harmless for a normal needle) instead of panicking
+                // on the non-boundary.
+                std::borrow::Cow::Owned(
+                    std::string::String::from_utf8_lossy(&s.as_bytes_(agent)[..end]).into_owned(),
+                )
             }
         };
         let search_str = search_str.to_string_lossy_(agent);
@@ -2356,16 +2348,11 @@ impl StringPrototype {
         // 13. Let substring be the substring of S from start to end.
         // 14. If substring is searchStr, return true.
         // 15. Return false.
-        let haystack_str = if start == 0 {
-            s.to_string_lossy_(agent)
-        } else {
-            let len = s.utf16_len_(agent);
-            if start >= len {
-                "".into()
-            } else {
-                let start = s.utf8_index_(agent, start).unwrap();
-                s.as_wtf8_(agent).slice_from(start).to_string_lossy()
-            }
+        let haystack_str = {
+            // Map the UTF-16 start to a WTF-8 byte offset; clamps out-of-range
+            // and rounds a surrogate split up, so it no longer panics.
+            let start = utf8_index_ceil(s, agent, start);
+            s.as_wtf8_(agent).slice_from(start).to_string_lossy()
         };
         Ok(haystack_str
             .starts_with(search_str.to_string_lossy_(agent).deref())
@@ -3170,6 +3157,33 @@ fn wtf8_substring<'gc>(
         buf.push(high);
     }
     String::from_wtf8_buf(agent, buf, gc)
+}
+
+/// WTF-8 byte offset of UTF-16 position `pos`, for use as the *start* of a
+/// forward search region (or the end of `endsWith`'s prefix). `pos` is clamped
+/// to `0..=utf16_len`, so an out-of-range position maps to the string end rather
+/// than panicking. When `pos` splits a surrogate pair there is no byte boundary
+/// to return (the pair is one fused 4-byte sequence), so round *up* to the
+/// boundary after the pair: the lone low surrogate at `pos` is not byte-
+/// addressable, and a search starting there could only differ for a needle that
+/// begins with that lone half, which the fused storage cannot match anyway.
+fn utf8_index_ceil(s: String, agent: &Agent, pos: usize) -> usize {
+    let pos = pos.min(s.utf16_len_(agent));
+    match s.utf8_index_(agent, pos) {
+        Some(b) => b,
+        None => s.utf8_index_(agent, pos + 1).expect("index after a split is a boundary"),
+    }
+}
+
+/// As [`utf8_index_ceil`] but rounds *down* to the boundary before a split pair.
+/// Used for `lastIndexOf`, where the offset bounds a backward search and a match
+/// start must stay `<= pos`; rounding up could admit a match starting past `pos`.
+fn utf8_index_floor(s: String, agent: &Agent, pos: usize) -> usize {
+    let pos = pos.min(s.utf16_len_(agent));
+    match s.utf8_index_(agent, pos) {
+        Some(b) => b,
+        None => s.utf8_index_(agent, pos - 1).expect("index before a split is a boundary"),
+    }
 }
 
 /// ### [22.1.3.17.1 StringPaddingBuiltinsImpl ( O, maxLength, fillString, placement )](https://tc39.es/ecma262/#sec-stringpaddingbuiltinsimpl)
