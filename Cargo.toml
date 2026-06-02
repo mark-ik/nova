@@ -47,6 +47,11 @@ oxc_span = "=0.124.0"
 oxc_syntax = "=0.124.0"
 rand = "=0.10.1"
 regex = "=1.12.3"
+# serval fork: Nova's RegExp matcher uses regress (the ECMAScript-spec backtracking
+# engine) instead of the `regex` crate, which cannot do lookahead/lookbehind/
+# backreferences. Pinned to the version boa uses in the serval workspace so the
+# ecosystem shares one regress.
+regress = { version = "0.11.1", features = ["utf16"] }
 ryu-js = "=1.0.2"
 soavec = "=0.2.0"
 soavec_derive = "=0.2.0"

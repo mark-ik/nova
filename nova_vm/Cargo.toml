@@ -29,7 +29,7 @@ oxc_semantic = { workspace = true }
 oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
 rand = { workspace = true }
-regex = { workspace = true, optional = true }
+regress = { workspace = true, optional = true }
 ryu-js = { workspace = true }
 small_string = { path = "../small_string", version = "1.0.0" }
 soavec = { workspace = true }
@@ -65,7 +65,7 @@ atomics = [
 date = []
 json = ["dep:sonic-rs"]
 math = []
-regexp = ["dep:regex"]
+regexp = ["dep:regress"]
 shared-array-buffer = ["array-buffer", "dep:ecmascript_atomics"]
 weak-refs = []
 set = []

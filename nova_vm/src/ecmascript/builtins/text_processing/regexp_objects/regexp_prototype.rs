@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use oxc_ast::ast::RegExpFlags;
-use wtf8::Wtf8Buf;
+use wtf8::{CodePoint, Wtf8Buf};
 
 use crate::{
     ecmascript::{
@@ -40,6 +40,25 @@ impl Builtin for RegExpPrototypeGetDotAll {
     const BEHAVIOUR: Behaviour = Behaviour::Regular(RegExpPrototype::get_dot_all);
 }
 impl BuiltinGetter for RegExpPrototypeGetDotAll {}
+
+/// Append the UTF-16 code-unit `range` of `units` to `buf` as WTF-8. Unlike a
+/// WTF-8 byte slice, this can represent a lone surrogate, so it tolerates a
+/// `range` boundary that splits a surrogate pair (which a non-Unicode regress
+/// match can produce). Used by `@@replace` / `@@split` for the inter-match
+/// segments of the subject string.
+fn push_code_units(buf: &mut Wtf8Buf, units: &[u16], range: core::ops::Range<usize>) {
+    for cp in char::decode_utf16(units[range].iter().copied()) {
+        match cp {
+            Ok(c) => buf.push_char(c),
+            // SAFETY: decode_utf16 only errors on an unpaired surrogate, which
+            // is a valid WTF-8 CodePoint.
+            Err(e) => {
+                buf.push(unsafe { CodePoint::from_u32_unchecked(e.unpaired_surrogate() as u32) })
+            },
+        }
+    }
+}
+
 struct RegExpPrototypeGetFlags;
 impl Builtin for RegExpPrototypeGetFlags {
     const NAME: String<'static> = BUILTIN_STRING_MEMORY.get_flags;
@@ -859,6 +878,12 @@ impl RegExpPrototype {
         }
         // 13. Let accumulatedResult be the empty String.
         let mut accumulated_result = Wtf8Buf::new();
+        // Snapshot S as UTF-16 code units so the inter-match spans can be
+        // copied by code-unit range. regress (non-Unicode mode) can match at a
+        // position that splits a surrogate pair, so a WTF-8 byte slice would
+        // have no boundary there; pushing code units yields the spec'd lone
+        // surrogate instead of panicking.
+        let units: Vec<u16> = s.get(agent).as_wtf8_(agent).to_ill_formed_utf16().collect();
         // 14. Let nextSourcePosition be 0.
         let mut next_source_position = 0;
         // 15. For each element result of results, do
@@ -1015,13 +1040,7 @@ impl RegExpPrototype {
                 // ii. Set accumulatedResult to the string-concatenation of
                 //     accumulatedResult, the substring of S from
                 //     nextSourcePosition to position, and replacementString.
-                let s = s.get(agent).bind(gc.nogc());
-                let next_source_position_utf8 = s.utf8_index_(agent, next_source_position).unwrap();
-                let position_utf8 = s.utf8_index_(agent, position).unwrap();
-                accumulated_result.push_wtf8(
-                    s.as_wtf8_(agent)
-                        .slice(next_source_position_utf8, position_utf8),
-                );
+                push_code_units(&mut accumulated_result, &units, next_source_position..position);
                 accumulated_result.push_wtf8(replacement_string.as_wtf8_(agent));
                 // iii. Set nextSourcePosition to position + matchLength.
                 next_source_position = position + match_length;
@@ -1029,11 +1048,8 @@ impl RegExpPrototype {
         }
         // 16. If nextSourcePosition ≥ lengthS, return accumulatedResult.
         if next_source_position < length_s {
-            // 17. Return the string-concatenation of accumulatedResult and the
-            // substring of S from nextSourcePosition.
-            let s = s.get(agent).bind(gc.nogc());
-            let next_source_position_utf8 = s.utf8_index_(agent, next_source_position).unwrap();
-            accumulated_result.push_wtf8(s.as_wtf8_(agent).slice_from(next_source_position_utf8));
+            // 17. Append the substring of S from nextSourcePosition to the end.
+            push_code_units(&mut accumulated_result, &units, next_source_position..length_s);
         }
         Ok(String::from_wtf8_buf(agent, accumulated_result, gc.into_nogc()).into())
     }
@@ -1333,6 +1349,11 @@ impl RegExpPrototype {
         }
         // 16. Let size be the length of S.
         let size = s.get(agent).utf16_len_(agent);
+        // Snapshot S as UTF-16 code units; segments are copied by code-unit
+        // range (a non-Unicode regress match can split a surrogate pair, which a
+        // WTF-8 byte slice cannot address — push code units to get the lone
+        // surrogate instead of panicking).
+        let units: Vec<u16> = s.get(agent).as_wtf8_(agent).to_ill_formed_utf16().collect();
         // 17. Let p be 0.
         let mut p = 0;
         // 18. Let q be p.
@@ -1380,18 +1401,10 @@ impl RegExpPrototype {
                     q = advance_string_index(agent, s.get(agent), q, unicode_matching);
                 } else {
                     // iv. Else,
-                    let s_local = s.get(agent).bind(gc.nogc());
                     let a_local = a.get(agent).bind(gc.nogc());
-                    let p_utf8 = s_local
-                        .utf8_index_(agent, p)
-                        .expect("p splits two surrogates into unmatched pairs");
-                    let q_utf8 = s_local
-                        .utf8_index_(agent, q)
-                        .expect("q splits two surrogates into unmatched pairs");
-                    // 1. Let T be the substring of S from p to q.
-                    let t = s_local.as_wtf8_(agent).slice(p_utf8, q_utf8);
-                    let mut t_buf = Wtf8Buf::with_capacity(t.len());
-                    t_buf.push_wtf8(t);
+                    // 1. Let T be the substring of S from p to q (by code unit).
+                    let mut t_buf = Wtf8Buf::new();
+                    push_code_units(&mut t_buf, &units, p..q);
                     let t = String::from_wtf8_buf(agent, t_buf, gc.nogc());
                     // 2. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(lengthA)), T).
                     if let Err(err) = a_local.push(agent, t.into()) {
@@ -1453,18 +1466,9 @@ impl RegExpPrototype {
         let result = if p == size {
             a.push(agent, String::EMPTY_STRING.into())
         } else {
-            let s = unsafe { s.take(agent) }.bind(gc);
-            let p_utf8 = s
-                .utf8_index_(agent, p)
-                .expect("p splits two surrogates into unmatched pairs");
-            // 20. Let T be the substring of S from p to size.
-            // `size` is a UTF-16 length; the slice end must be a WTF-8 byte
-            // index. p..size always runs to the end, so slice from p_utf8.
-            // (Passing `size` directly mixed a byte start with a UTF-16 end and
-            // panicked in `Wtf8::slice` on any multi-byte tail.)
-            let t = s.as_wtf8_(agent).slice_from(p_utf8);
-            let mut t_buf = Wtf8Buf::with_capacity(t.len());
-            t_buf.push_wtf8(t);
+            // 20. Let T be the substring of S from p to size (by code unit).
+            let mut t_buf = Wtf8Buf::new();
+            push_code_units(&mut t_buf, &units, p..size);
             let t = String::from_wtf8_buf(agent, t_buf, gc);
             // 21. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(lengthA)), T).
             a.push(agent, t.into())

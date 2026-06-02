@@ -3405,10 +3405,11 @@ pub(crate) fn get_substitution<'gc, 'scope>(
     let utf8_string_length = str.len();
     // 2. Assert: position ≤ stringLength.
     debug_assert!(position <= scoped_str.get(agent).utf16_len_(agent));
-    let utf8_position = scoped_str
-        .get(agent)
-        .utf8_index_(agent, position)
-        .expect("Invalid UTF-8 position");
+    // Byte offset of the match position, for the `$\`` / `$'` substrings. A
+    // non-Unicode regress match can split a surrogate pair (no byte boundary),
+    // so round down rather than `.unwrap()`-panicking; it is only consulted by
+    // those two rare patterns, and exact for every non-split position.
+    let utf8_position = utf8_index_floor(scoped_str.get(agent), agent, position);
     // 3. Let result be the empty String.
     let mut result = Wtf8Buf::new();
     // 4. Let templateRemainder be replacementTemplate.
@@ -3422,12 +3423,17 @@ pub(crate) fn get_substitution<'gc, 'scope>(
         // a. NOTE: The following steps isolate ref (a prefix of
         //    templateRemainder), determine refReplacement (its replacement),
         //    and then append that replacement to result.
-        let mut r#ref = template_remainder;
-        let mut ref_replacement = std::borrow::Cow::Borrowed(template_remainder);
+        // h. (default) Let ref be the first code point of templateRemainder,
+        // taken literally; overridden below for a recognised "$" pattern.
+        // (Defaulting `ref` to the *whole* remainder was a bug: a literal run
+        // before the next "$" swallowed the rest of the template, so e.g.
+        // "[$1]" or "a-$2" stopped substituting after the first token. It was
+        // masked while regex patterns failed to compile and replace never ran.)
+        let first_len = template_remainder.chars().next().map_or(1, char::len_utf8);
+        let mut r#ref = &template_remainder[..first_len];
+        let mut ref_replacement = std::borrow::Cow::Borrowed(r#ref);
         if template_remainder_bytes.len() == 1 {
-            // h. Else,
-            // i. Let ref be the substring of templateRemainder from 0 to 1.
-            // ii. Let refReplacement be ref.
+            // h. (single code unit) — the default already covers it.
         } else if template_remainder_bytes[0] == b'$' {
             if template_remainder_bytes[1] == b'$' {
                 // b. If templateRemainder starts with "$$", then

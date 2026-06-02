@@ -7,6 +7,7 @@ use std::ops::ControlFlow;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::RegExpFlags;
 use oxc_regular_expression::{LiteralParser, Options};
+use wtf8::{CodePoint, Wtf8Buf};
 
 use crate::{
     ecmascript::{
@@ -522,19 +523,10 @@ pub(crate) fn reg_exp_builtin_exec_prepare<'a>(
     if !global && !sticky {
         last_index = 0;
     }
-    // `last_index` is a UTF-16 code-unit index (the regex's lastIndex); the
-    // matcher runs over bytes, so convert it to a WTF-8 byte offset. Past the
-    // end of the string there is no offset to map to: bound the conversion by
-    // the UTF-16 length and, when past it, push the value past the *byte* length
-    // so the length guard in `reg_exp_builtin_exec` fails the match. (Comparing
-    // the UTF-16 index against the byte length here let an out-of-range index
-    // through and panicked indexing the UTF-16->byte map — reachable e.g. from a
-    // fullUnicode empty-match `matchAll` advancing lastIndex one past the end.)
-    let last_index = if last_index > s.utf16_len_(agent) {
-        s.len_(agent) + 1
-    } else {
-        s.utf8_index_(agent, last_index).unwrap_or(last_index)
-    };
+    // `last_index` stays a UTF-16 code-unit index: regress's `find_from_*` takes
+    // a code-unit start and reports code-unit positions, and exec compares it
+    // against the UTF-16 length. (No WTF-8 byte conversion, so no out-of-range
+    // map indexing.)
     // 8. Let matcher be R.[[RegExpMatcher]].
     if let Err(err) = &r.get(agent).reg_exp_matcher {
         return Err(agent.throw_exception(ExceptionType::SyntaxError, err.to_string(), gc));
@@ -576,163 +568,106 @@ pub(crate) fn reg_exp_builtin_exec<'a>(
         global,
         sticky,
         has_indices,
-        full_unicode: _,
+        full_unicode,
     } = result.bind(gc);
-    // 1. Let length be the length of S.
-    let length = s.len_(agent);
-    let r_data = r.get_direct_mut(&mut agent.heap.regexps);
-    let s_bytes = s.as_bytes_(&agent.heap.strings);
-    // 8. Let matcher be R.[[RegExpMatcher]].
-    // SAFETY: reg_exp_builtin_exec_base checks that the matcher is set.
-    let matcher = unsafe { r_data.reg_exp_matcher.as_mut().unwrap_unchecked() };
-    // 10. Let matchSucceeded be false.
-    // 11. If fullUnicode is true, let input be StringToCodePoints(S).
-    //     Otherwise, let input be a List whose elements are the code units
-    //     that are the elements of S.
-    // 12. NOTE: Each element of input is considered to be a character.
-    // 13. Repeat, while matchSucceeded is false,
-    // a. If lastIndex > length, then
+    // 1. Let length be the length of S, in UTF-16 code units.
+    let length = s.utf16_len_(agent);
+    // 13.a. If lastIndex > length, then
     if last_index > length {
-        // i. If global is true or sticky is true, then
+        // i. If global is true or sticky is true, set lastIndex to 0.
         if global || sticky {
-            // 1. Perform ? Set(R, "lastIndex", +0𝔽, true).
-            r_data.last_index = RegExpLastIndex::ZERO;
+            r.get_direct_mut(&mut agent.heap.regexps).last_index = RegExpLastIndex::ZERO;
         }
         // ii. Return null.
         return Ok(None);
     }
-    // b. Let inputIndex be the index into input of the character that was
-    //    obtained from element lastIndex of S.
-    let input_index = last_index;
-    // c. Let r be matcher(input, inputIndex).
-    let result = matcher.captures_at(s_bytes, input_index);
-    // d. If r is failure, then
-    let Some(result) = result else {
-        // i. If global is true or sticky is true, then
-        if global || sticky {
-            // 1. Perform ? Set(R, "lastIndex", +0𝔽, true).
-            r_data.last_index = RegExpLastIndex::ZERO;
+    // Feed regress the string as UTF-16 code units; it reports matches as
+    // code-unit ranges, so `.index`/lastIndex/captures need no WTF-8 byte
+    // conversion. (regress is the ECMAScript-spec backtracking engine; unlike
+    // the `regex` crate it supports lookahead/lookbehind/backreferences.)
+    let units: Vec<u16> = s.as_wtf8_(&agent.heap.strings).to_ill_formed_utf16().collect();
+    // 8. Let matcher be R.[[RegExpMatcher]]. 13.c. Let r be matcher(input, lastIndex).
+    let m: Option<regress::Match> = {
+        let r_data = r.get_direct_mut(&mut agent.heap.regexps);
+        // SAFETY: reg_exp_builtin_exec_prepare checks the matcher is set.
+        let matcher = unsafe { r_data.reg_exp_matcher.as_ref().unwrap_unchecked() };
+        // fullUnicode pairs surrogates into code points; otherwise each code
+        // unit is a character (ucs2). Both report positions in code units.
+        if full_unicode {
+            matcher.find_from_utf16(&units, last_index).next()
+        } else {
+            matcher.find_from_ucs2(&units, last_index).next()
         }
-        // ii. Return null.
+    };
+    // 13.d. If r is failure, then reset (if g/y) and return null.
+    let Some(m) = m else {
+        if global || sticky {
+            r.get_direct_mut(&mut agent.heap.regexps).last_index = RegExpLastIndex::ZERO;
+        }
         return Ok(None);
     };
-    // SAFETY: first capture group is always the full match.
-    let full_match = unsafe { result.get(0).unwrap_unchecked() };
-    // i. If sticky is true, then
-    if sticky && full_match.start() != last_index {
-        // sticky did match but not at the start position.
-        // 1. Perform ? Set(R, "lastIndex", +0𝔽, true).
-        r_data.last_index = RegExpLastIndex::ZERO;
-        // 2. Return null.
+    // regress has no native sticky flag, so emulate it: a sticky match must
+    // begin exactly at lastIndex.
+    if sticky && m.start() != last_index {
+        r.get_direct_mut(&mut agent.heap.regexps).last_index = RegExpLastIndex::ZERO;
         return Ok(None);
-        // ii. Set lastIndex to AdvanceStringIndex(S, lastIndex, fullUnicode).
     }
-    // `full_match.start()` is a WTF-8 byte offset (the matcher runs over the
-    // string's bytes). The `index` property and lastIndex are UTF-16 code-unit
-    // offsets, so convert — exactly as the end index `e` is converted just
-    // below. Storing the raw byte offset made `.index`, `search`, and the
-    // @@replace/@@split slice positions derived from it wrong for any string
-    // with a non-ASCII character at or before the match.
-    let last_index = s.utf16_index_(&agent.heap.strings, full_match.start());
-    // e. Else,
-    // i. Assert: r is a MatchState.
-    // ii. Set matchSucceeded to true.
-    // 14. Let e be r.[[EndIndex]].
-    let e = full_match.end();
-    // 15. If fullUnicode is true, set e to GetStringIndex(S, e).
-    let e = s.utf16_index_(&agent.heap.strings, e);
-    // 16. If global is true or sticky is true, then
+    // match start/end are UTF-16 code-unit indices (GetStringIndex is implicit).
+    let match_start = m.start();
+    let e = m.end();
+    // 16. If global is true or sticky is true, set lastIndex to e.
     if global || sticky {
-        // a. Perform ? Set(R, "lastIndex", 𝔽(e), true).
-        r_data.last_index = e.into();
+        r.get_direct_mut(&mut agent.heap.regexps).last_index = e.into();
     }
-    // 17. Let n be the number of elements in r.[[Captures]].
-    let n = result.len();
-    // 18. Assert: n = R.[[RegExpRecord]].[[CapturingGroupsCount]].
-    debug_assert_eq!(n, matcher.captures_len());
+    // 17. Let n be the number of capturing groups (excluding the whole match).
+    let n = m.captures.len();
     // 19. Assert: n < 2**32 - 1.
     debug_assert!(n < 2usize.pow(32) - 1);
-    let has_group_name = matcher.capture_names().any(|n| n.is_some());
-    // 20. Let A be ! ArrayCreate(n + 1).
-    // Note: we use n because it already contains the full-match group in it.
-    let a = array_create(agent, n, n, None, gc).unwrap();
-    // 21. Assert: The mathematical value of A's "length" property is n + 1.
-    debug_assert_eq!(a.len(agent) as usize, n);
-    // 22. Perform ! CreateDataPropertyOrThrow(A, "index", 𝔽(lastIndex)).
+    // Named groups, owned so the borrow on `m` ends before we touch the heap.
+    let named_groups: Vec<(std::string::String, Option<core::ops::Range<usize>>)> = m
+        .named_groups()
+        .map(|(name, range)| (name.to_string(), range))
+        .collect();
+    let has_group_name = !named_groups.is_empty();
+    // 20. Let A be ! ArrayCreate(n + 1) (slot 0 is the whole match).
+    let a = array_create(agent, n + 1, n + 1, None, gc).unwrap();
+    // 21. A has n + 1 elements: the whole match plus n capture groups.
+    debug_assert_eq!(a.len(agent) as usize, n + 1);
+    // 22. CreateDataPropertyOrThrow(A, "index", 𝔽(matchStart)) — code units.
     unwrap_try(try_create_data_property_or_throw(
         agent,
         a,
         BUILTIN_STRING_MEMORY.index.to_property_key(),
-        Number::try_from(last_index).unwrap().into(),
+        Number::try_from(match_start).unwrap().into(),
         None,
         gc,
     ));
-    let input = String::from_static_str(agent, "input", gc).to_property_key();
-    // 23. Perform ! CreateDataPropertyOrThrow(A, "input", S).
-    unwrap_try(try_create_data_property_or_throw(
-        agent,
-        a,
-        input,
-        s.into(),
-        None,
-        gc,
-    ));
-    // 24. Let match be the Match Record { [[StartIndex]]: lastIndex, [[EndIndex]]: e }.
-    // 25. Let indices be a new empty List.
-    // let mut indices = vec![];
-    // 26. Let groupNames be a new empty List.
-    // 27. Append match to indices.
-    // 28. Let matchedSubstr be GetMatchString(S, match).
-    // 29. Perform ! CreateDataPropertyOrThrow(A, "0", matchedSubstr).
-    // 30. If R contains any GroupName, then
+    // 23. CreateDataPropertyOrThrow(A, "input", S).
+    let input_key = String::from_static_str(agent, "input", gc).to_property_key();
+    unwrap_try(try_create_data_property_or_throw(agent, a, input_key, s.into(), None, gc));
+    // 30/31. groups is a null-proto object iff any capture group is named.
     let groups = if has_group_name {
-        // a. Let groups be OrdinaryObjectCreate(null).
-        // b. Let hasGroups be true.
         Some(ordinary_object_create_null(agent, gc))
     } else {
-        // 31. Else,
-        // a. Let groups be undefined.
-        // b. Let hasGroups be false.
         None
     };
-    let key = String::from_static_str(agent, "groups", gc).to_property_key();
-    // 32. Perform ! CreateDataPropertyOrThrow(A, "groups", groups).
+    // 28/29. A[0] is the matched substring (rebuilt from the code-unit range,
+    // so a split surrogate survives as a lone surrogate).
+    let matched = code_units_substring(agent, &units, match_start..e, gc);
     unwrap_try(try_create_data_property_or_throw(
         agent,
         a,
-        key,
-        groups.map_or(Value::Undefined, |g| g.into()),
+        PropertyKey::try_from(0u32).unwrap(),
+        matched.into(),
         None,
         gc,
     ));
-    // 33. Let matchedGroupNames be a new empty List.
-    // let mut matched_group_names = vec![];
-    // 34. For each integer i such that 1 ≤ i ≤ n, in ascending order, do
-    for (i, capture_i) in result.iter().enumerate() {
-        // a. Let captureI be ith element of r.[[Captures]].
-        if has_indices {
-            // b. If captureI is undefined, then
-            //         i. Let capturedValue be undefined.
-            //         ii. Append undefined to indices.
-            // c. Else,
-            //         i. Let captureStart be captureI.[[StartIndex]].
-            //         ii. Let captureEnd be captureI.[[EndIndex]].
-            //         iii. If fullUnicode is true, then
-            //                 1. Set captureStart to GetStringIndex(S, captureStart).
-            //                 2. Set captureEnd to GetStringIndex(S, captureEnd).
-            //         iv. Let capture be the Match Record { [[StartIndex]]: captureStart, [[EndIndex]]: captureEnd }.
-            //         v. Let capturedValue be GetMatchString(S, capture).
-            //         vi. Append capture to indices.
-        }
-        let captured_value = if let Some(capture_i) = capture_i {
-            match std::string::String::from_utf8_lossy(capture_i.as_bytes()) {
-                std::borrow::Cow::Borrowed(str) => String::from_str(agent, str, gc).into(),
-                std::borrow::Cow::Owned(string) => String::from_string(agent, string, gc).into(),
-            }
-        } else {
-            Value::Undefined
+    // 34. For each 1 ≤ i ≤ n, A[i] is the ith capture (a substring or undefined).
+    for i in 1..=n {
+        let captured_value = match m.captures[i - 1].clone() {
+            Some(range) => code_units_substring(agent, &units, range, gc).into(),
+            None => Value::Undefined,
         };
-        // d. Perform ! CreateDataPropertyOrThrow(A, ! ToString(𝔽(i)), capturedValue).
         unwrap_try(try_create_data_property_or_throw(
             agent,
             a,
@@ -741,24 +676,145 @@ pub(crate) fn reg_exp_builtin_exec<'a>(
             None,
             gc,
         ));
-        // e. If the ith capture of R was defined with a GroupName, then
-        //         i. Let s be the CapturingGroupName of that GroupName.
-        //         ii. If matchedGroupNames contains s, then
-        //                 1. Assert: capturedValue is undefined.
-        //                 2. Append undefined to groupNames.
-        //         iii. Else,
-        //                 1. If capturedValue is not undefined, append s to matchedGroupNames.
-        //                 2. NOTE: If there are multiple groups named s, groups may already have an s property at this point. However, because groups is an ordinary object whose properties are all writable data properties, the call to CreateDataPropertyOrThrow is nevertheless guaranteed to succeed.
-        //                 3. Perform ! CreateDataPropertyOrThrow(groups, s, capturedValue).
-        //                 4. Append s to groupNames.
-        // f. Else,
-        //         i. Append undefined to groupNames.
     }
-    // 35. If hasIndices is true, then
-    //         a. Let indicesArray be MakeMatchIndicesIndexPairArray(S, indices, groupNames, hasGroups).
-    //         b. Perform ! CreateDataPropertyOrThrow(A, "indices", indicesArray).
+    // 30.e. Populate the groups object from the named captures.
+    if let Some(groups) = groups {
+        for (name, range) in &named_groups {
+            let value = match range.clone() {
+                Some(range) => code_units_substring(agent, &units, range, gc).into(),
+                None => Value::Undefined,
+            };
+            let key = String::from_str(agent, name, gc).to_property_key();
+            unwrap_try(try_create_data_property_or_throw(agent, groups, key, value, None, gc));
+        }
+    }
+    // 32. CreateDataPropertyOrThrow(A, "groups", groups).
+    let groups_key = String::from_static_str(agent, "groups", gc).to_property_key();
+    unwrap_try(try_create_data_property_or_throw(
+        agent,
+        a,
+        groups_key,
+        groups.map_or(Value::Undefined, |g| g.into()),
+        None,
+        gc,
+    ));
+    // 35. If hasIndices (the `d` flag) is set, attach the "indices" array
+    // (MakeMatchIndicesIndexPairArray). Each element is a [start, end] code-unit
+    // pair (or undefined for an unmatched group); .groups mirrors the named
+    // captures. regress gives the ranges directly, so no byte conversion.
+    if has_indices {
+        let indices = array_create(agent, n + 1, n + 1, None, gc).unwrap();
+        let whole = index_pair(agent, match_start, e, gc);
+        unwrap_try(try_create_data_property_or_throw(
+            agent,
+            indices,
+            PropertyKey::try_from(0u32).unwrap(),
+            whole.into(),
+            None,
+            gc,
+        ));
+        for i in 1..=n {
+            let value = match m.captures[i - 1].clone() {
+                Some(range) => index_pair(agent, range.start, range.end, gc).into(),
+                None => Value::Undefined,
+            };
+            unwrap_try(try_create_data_property_or_throw(
+                agent,
+                indices,
+                PropertyKey::try_from(i).unwrap(),
+                value,
+                None,
+                gc,
+            ));
+        }
+        let idx_groups = if has_group_name {
+            Some(ordinary_object_create_null(agent, gc))
+        } else {
+            None
+        };
+        if let Some(idx_groups) = idx_groups {
+            for (name, range) in &named_groups {
+                let value = match range.clone() {
+                    Some(range) => index_pair(agent, range.start, range.end, gc).into(),
+                    None => Value::Undefined,
+                };
+                let key = String::from_str(agent, name, gc).to_property_key();
+                unwrap_try(try_create_data_property_or_throw(
+                    agent, idx_groups, key, value, None, gc,
+                ));
+            }
+        }
+        let idx_groups_key = String::from_static_str(agent, "groups", gc).to_property_key();
+        unwrap_try(try_create_data_property_or_throw(
+            agent,
+            indices,
+            idx_groups_key,
+            idx_groups.map_or(Value::Undefined, |g| g.into()),
+            None,
+            gc,
+        ));
+        let indices_key = String::from_static_str(agent, "indices", gc).to_property_key();
+        unwrap_try(try_create_data_property_or_throw(
+            agent,
+            a,
+            indices_key,
+            indices.into(),
+            None,
+            gc,
+        ));
+    }
     // 36. Return A.
     Ok(Some(a))
+}
+
+/// A `[start, end]` two-element index pair (code units) for the `d` flag's
+/// `indices` array.
+fn index_pair<'gc>(
+    agent: &mut Agent,
+    start: usize,
+    end: usize,
+    gc: NoGcScope<'gc, '_>,
+) -> Array<'gc> {
+    let pair = array_create(agent, 2, 2, None, gc).unwrap();
+    unwrap_try(try_create_data_property_or_throw(
+        agent,
+        pair,
+        PropertyKey::try_from(0u32).unwrap(),
+        Number::try_from(start).unwrap().into(),
+        None,
+        gc,
+    ));
+    unwrap_try(try_create_data_property_or_throw(
+        agent,
+        pair,
+        PropertyKey::try_from(1u32).unwrap(),
+        Number::try_from(end).unwrap().into(),
+        None,
+        gc,
+    ));
+    pair
+}
+
+/// Build a JS String from a UTF-16 code-unit range of `units`. Lone surrogates
+/// (e.g. from slicing through a pair) are preserved via WTF-8.
+fn code_units_substring<'gc>(
+    agent: &mut Agent,
+    units: &[u16],
+    range: core::ops::Range<usize>,
+    gc: NoGcScope<'gc, '_>,
+) -> String<'gc> {
+    let mut buf = Wtf8Buf::new();
+    for cp in char::decode_utf16(units[range].iter().copied()) {
+        match cp {
+            Ok(c) => buf.push_char(c),
+            // SAFETY: decode_utf16 only errors on an unpaired surrogate, which
+            // is a valid WTF-8 CodePoint.
+            Err(e) => {
+                buf.push(unsafe { CodePoint::from_u32_unchecked(e.unpaired_surrogate() as u32) })
+            },
+        }
+    }
+    String::from_wtf8_buf(agent, buf, gc)
 }
 
 pub(crate) fn reg_exp_builtin_test<'a>(
@@ -783,63 +839,44 @@ pub(crate) fn reg_exp_builtin_test<'a>(
         last_index,
         sticky,
         global,
+        full_unicode,
         ..
     } = result.bind(gc);
 
-    // 1. Let length be the length of S.
-    let length = s.len_(agent);
-    let r_data = r.get_direct_mut(&mut agent.heap.regexps);
+    // 1. Let length be the length of S, in UTF-16 code units.
+    let length = s.utf16_len_(agent);
     if last_index > length {
-        // i. If global is true or sticky is true, then
         if global || sticky {
-            // 1. Perform ? Set(R, "lastIndex", +0𝔽, true).
-            r_data.last_index = RegExpLastIndex::ZERO;
+            r.get_direct_mut(&mut agent.heap.regexps).last_index = RegExpLastIndex::ZERO;
         }
-        // ii. Return null.
         return Ok(false);
     }
-    let s_bytes = s.as_bytes_(&agent.heap.strings);
-    // 8. Let matcher be R.[[RegExpMatcher]].
-    // SAFETY: reg_exp_builtin_exec_base checks that the matcher is set.
-    let matcher = unsafe { r_data.reg_exp_matcher.as_mut().unwrap_unchecked() };
-    // 10. Let matchSucceeded be false.
-    // 11. If fullUnicode is true, let input be StringToCodePoints(S).
-    //     Otherwise, let input be a List whose elements are the code units
-    //     that are the elements of S.
-    // 12. NOTE: Each element of input is considered to be a character.
-    // 13. Repeat, while matchSucceeded is false,
-    // c. Let r be matcher(input, inputIndex).
-    if global || sticky {
-        // Global and sticky flags can observe where we found a test result, so
-        // we need to actually find properly.
-        let result = matcher.find_at(s_bytes, last_index);
-        if let Some(result) = result {
-            if sticky && result.start() != last_index {
-                // sticky did match but not at the start position.
-                // 1. Perform ? Set(R, "lastIndex", +0𝔽, true).
-                r_data.last_index = RegExpLastIndex::ZERO;
-                // 2. Return null.
-                Ok(false)
-            } else {
-                // ii. Set lastIndex to AdvanceStringIndex(S, lastIndex, fullUnicode).
-                let e = result.end();
-                // 15. If fullUnicode is true, set e to GetStringIndex(S, e).
-                let e = s.utf16_index_(&agent.heap.strings, e);
-                // 16. If global is true or sticky is true, then
-                // a. Perform ? Set(R, "lastIndex", 𝔽(e), true).
-                r_data.last_index = e.into();
-                Ok(true)
-            }
+    // Run regress over the string's UTF-16 code units (see reg_exp_builtin_exec).
+    let units: Vec<u16> = s.as_wtf8_(&agent.heap.strings).to_ill_formed_utf16().collect();
+    let m: Option<regress::Match> = {
+        let r_data = r.get_direct_mut(&mut agent.heap.regexps);
+        // SAFETY: reg_exp_builtin_exec_prepare checks the matcher is set.
+        let matcher = unsafe { r_data.reg_exp_matcher.as_ref().unwrap_unchecked() };
+        if full_unicode {
+            matcher.find_from_utf16(&units, last_index).next()
         } else {
-            // No match.
+            matcher.find_from_ucs2(&units, last_index).next()
+        }
+    };
+    let r_data = r.get_direct_mut(&mut agent.heap.regexps);
+    // Global and sticky observe the match position via lastIndex; non-global
+    // non-sticky always resets lastIndex to 0. (regress has no native sticky,
+    // so a sticky match off the start position is treated as no match.)
+    match m {
+        Some(m) if !(sticky && m.start() != last_index) => {
+            r_data.last_index =
+                if global || sticky { m.end().into() } else { RegExpLastIndex::ZERO };
+            Ok(true)
+        },
+        _ => {
             r_data.last_index = RegExpLastIndex::ZERO;
             Ok(false)
-        }
-    } else {
-        // Otherwise we can simply try-match.
-        let result = matcher.is_match_at(s_bytes, last_index);
-        r_data.last_index = RegExpLastIndex::ZERO;
-        Ok(result)
+        },
     }
 }
 

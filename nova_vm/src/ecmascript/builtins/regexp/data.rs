@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use oxc_ast::ast::RegExpFlags;
-use regex::bytes::{Regex, RegexBuilder};
+use regress::Regex;
 use wtf8::Wtf8Buf;
 
 use crate::{
@@ -118,7 +118,7 @@ impl From<usize> for RegExpLastIndex {
 #[derive(Debug)]
 pub(crate) struct RegExpHeapData<'a> {
     pub(super) object_index: Option<OrdinaryObject<'a>>,
-    pub(super) reg_exp_matcher: Result<Regex, regex::Error>,
+    pub(super) reg_exp_matcher: Result<Regex, regress::Error>,
     pub(super) original_source: String<'a>,
     pub(super) original_flags: RegExpFlags,
     pub(super) last_index: RegExpLastIndex,
@@ -128,14 +128,36 @@ impl<'a> RegExpHeapData<'a> {
     pub(crate) fn compile_pattern(
         pattern: &str,
         flags: RegExpFlags,
-    ) -> Result<Regex, regex::Error> {
-        RegexBuilder::new(pattern)
-            .dot_matches_new_line((flags & RegExpFlags::M).bits() > 0)
-            .case_insensitive((flags & RegExpFlags::I).bits() > 0)
-            .unicode(true)
-            .dot_matches_new_line((flags & RegExpFlags::S).bits() > 0)
-            .octal(false) // TODO: !strict
-            .build()
+    ) -> Result<Regex, regress::Error> {
+        // Map JS flags to the subset regress parses from a flag string ("imsuv").
+        // g/y/d are JS-level (handled by exec), not compile-level.
+        let mut regress_flags = std::string::String::with_capacity(5);
+        if (flags & RegExpFlags::I).bits() > 0 {
+            regress_flags.push('i');
+        }
+        if (flags & RegExpFlags::M).bits() > 0 {
+            regress_flags.push('m');
+        }
+        if (flags & RegExpFlags::S).bits() > 0 {
+            regress_flags.push('s');
+        }
+        let full_unicode = (flags & (RegExpFlags::U | RegExpFlags::V)).bits() > 0;
+        if (flags & RegExpFlags::U).bits() > 0 {
+            regress_flags.push('u');
+        }
+        if (flags & RegExpFlags::V).bits() > 0 {
+            regress_flags.push('v');
+        }
+        // In Unicode mode (u/v) the pattern is interpreted as code points;
+        // otherwise as UTF-16 code units, so a non-BMP literal in the pattern
+        // matches the surrogate-pair code units of the ucs2 haystack that
+        // reg_exp_builtin_exec feeds in non-Unicode mode.
+        if full_unicode {
+            Regex::from_unicode(pattern.chars().map(u32::from), regress_flags.as_str())
+        } else {
+            let units: Vec<u16> = pattern.encode_utf16().collect();
+            Regex::from_unicode(units.iter().copied().map(u32::from), regress_flags.as_str())
+        }
     }
 
     pub(crate) fn new(agent: &Agent, source: String<'a>, flags: RegExpFlags) -> Self {
@@ -169,7 +191,7 @@ impl Default for RegExpHeapData<'_> {
     fn default() -> Self {
         Self {
             object_index: Default::default(),
-            reg_exp_matcher: Err(regex::Error::CompiledTooBig(usize::MAX)),
+            reg_exp_matcher: Err(regress::Error { text: std::string::String::new() }),
             original_source: String::EMPTY_STRING,
             original_flags: RegExpFlags::empty(),
             last_index: Default::default(),
