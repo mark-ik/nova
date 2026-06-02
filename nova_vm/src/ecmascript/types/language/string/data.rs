@@ -160,11 +160,17 @@ impl StringRecord {
                     match mapping[idx] {
                         Some(idx) => (idx.into(), false),
                         None => {
-                            // We got a None; that means we're looking at a latter
-                            // surrogate here.
-                            // SAFETY: idx is not 0.
-                            let idx = mapping[unsafe { idx.unchecked_sub(1) }].unwrap();
-                            (idx.into(), true)
+                            // A None entry marks the latter half of a surrogate
+                            // pair; its former half sits at the previous UTF-16
+                            // index. That half's byte offset is a NonZeroUsize,
+                            // except a pair leading the string sits at byte 0 —
+                            // which NonZeroUsize can't hold and stores as None, so
+                            // map None back to 0. (Unwrapping it panicked on
+                            // `charCodeAt(1)` of a string starting with a non-BMP
+                            // character.)
+                            // SAFETY: idx is not 0 (handled above).
+                            let prev = unsafe { idx.unchecked_sub(1) };
+                            (mapping[prev].map_or(0, NonZeroUsize::get), true)
                         }
                     }
                 }
@@ -304,8 +310,13 @@ impl StringRecord {
                     .unwrap()
             }
             None => {
-                // Matched None; this is the second character in a surrogate pair.
-                let wtf8_index: usize = mapping[utf16_idx - 1].unwrap().into();
+                // Matched None; this is the second code unit in a surrogate
+                // pair. Its former half sits at the previous UTF-16 index, whose
+                // byte offset is stored as a NonZeroUsize — or None for a pair
+                // leading the string (byte 0, which NonZeroUsize can't hold), so
+                // map None back to 0. (Unwrapping it panicked on `codePointAt(1)`
+                // of a string starting with a non-BMP character.)
+                let wtf8_index: usize = mapping[utf16_idx - 1].map_or(0, NonZeroUsize::get);
                 let char = self
                     .as_wtf8()
                     .slice_from(wtf8_index)

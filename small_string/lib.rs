@@ -10,6 +10,18 @@ use wtf8::{CodePoint, Wtf8};
 /// Maximum number of bytes a [SmallString] can inline.
 const MAX_LEN: usize = 7;
 
+/// Number of bytes a single code point occupies in WTF-8. Matches UTF-8 lengths;
+/// lone surrogates (`U+D800..=U+DFFF`) fall in the 3-byte band, which is how
+/// WTF-8 encodes them.
+const fn code_point_wtf8_len(code_point: u32) -> usize {
+    match code_point {
+        0x0000..=0x007F => 1,
+        0x0080..=0x07FF => 2,
+        0x0800..=0xFFFF => 3,
+        _ => 4,
+    }
+}
+
 /// An String stored on the stack.
 ///
 /// The size of the string is at most 7 bytes, and its is encoded in [WTF-8].
@@ -203,22 +215,33 @@ impl SmallString {
     }
 
     /// Get the corresponding WTF-8 byte index for a given WTF-16 code unit
-    /// index. Returns `None` if the index is out of bounds.
+    /// index. Returns `None` if the index is the second code unit in a
+    /// surrogate pair, or is out of bounds.
     pub fn utf8_index(&self, utf16_idx: usize) -> Option<usize> {
         if self.is_ascii() {
             return Some(utf16_idx);
         }
+        // Walk code points, tracking the running WTF-8 *byte* offset and the
+        // running WTF-16 code-unit index in parallel. The byte offset is the
+        // answer; the WTF-16 index is what the caller asked about. (The earlier
+        // version returned the code-point *ordinal* from `enumerate()` as the
+        // byte index — correct only for ASCII, off by the multi-byte slack for
+        // any non-ASCII content.)
         let mut current_utf16_index = 0;
+        let mut byte_index = 0;
         let mut scratch = [0u16; 2];
-        for (idx, ch) in self.as_wtf8().code_points().enumerate() {
+        for ch in self.as_wtf8().code_points() {
             match current_utf16_index.cmp(&utf16_idx) {
-                Ordering::Equal => return Some(idx),
+                Ordering::Equal => return Some(byte_index),
+                // Stepped past it: the requested index fell inside the previous
+                // code point (the latter half of a surrogate pair).
                 Ordering::Greater => return None,
                 Ordering::Less => {
                     current_utf16_index += ch
                         .to_char()
                         .map(|ch| ch.encode_utf16(&mut scratch).len())
-                        .unwrap_or(1)
+                        .unwrap_or(1);
+                    byte_index += code_point_wtf8_len(ch.to_u32());
                 }
             }
         }
@@ -226,6 +249,7 @@ impl SmallString {
             return None;
         }
         debug_assert_eq!(utf16_idx, current_utf16_index);
+        debug_assert_eq!(byte_index, self.len());
         Some(self.len())
     }
 
@@ -614,4 +638,37 @@ fn str_conversion() {
     let too_large_unicode = "🤗🤗🤗";
     assert!(SmallString::try_from(too_large_unicode).is_err());
     assert!(SmallString::try_from(Wtf8::from_str(too_large_unicode)).is_err());
+}
+
+#[test]
+fn utf8_index_maps_utf16_units_to_byte_offsets() {
+    // ASCII: WTF-16 index == byte offset.
+    let s = SmallString::try_from("abcd").unwrap();
+    assert_eq!(s.utf8_index(0), Some(0));
+    assert_eq!(s.utf8_index(2), Some(2));
+    assert_eq!(s.utf8_index(4), Some(4)); // end
+
+    // Non-ASCII: byte offsets must skip the multi-byte slack, not track the
+    // code-point ordinal. U+FFFF is 3 bytes; "\u{FFFF}foo" is [0,3,4,5,6].
+    let s = SmallString::try_from("\u{FFFF}foo").unwrap();
+    assert_eq!(s.len(), 6);
+    assert_eq!(s.utf8_index(0), Some(0));
+    assert_eq!(s.utf8_index(1), Some(3)); // 'f', NOT byte 1 (mid-U+FFFF)
+    assert_eq!(s.utf8_index(2), Some(4));
+    assert_eq!(s.utf8_index(4), Some(6)); // end
+
+    // Mixed widths: 'a'(1) + Δ U+0394(2) + あ U+3042(3) = bytes [0,1,3].
+    let s = SmallString::try_from("aΔあ").unwrap();
+    assert_eq!(s.len(), 6);
+    assert_eq!(s.utf8_index(1), Some(1)); // Δ
+    assert_eq!(s.utf8_index(2), Some(3)); // あ
+    assert_eq!(s.utf8_index(3), Some(6)); // end
+
+    // A boundary inside a surrogate pair has no byte offset -> None. 🤗 is one
+    // astral scalar (4 bytes, 2 WTF-16 units): index 1 is its trailing half.
+    let s = SmallString::try_from("🤗").unwrap();
+    assert_eq!(s.utf16_len(), 2);
+    assert_eq!(s.utf8_index(0), Some(0));
+    assert_eq!(s.utf8_index(1), None); // mid-pair
+    assert_eq!(s.utf8_index(2), Some(4)); // end
 }

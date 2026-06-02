@@ -1458,7 +1458,11 @@ impl RegExpPrototype {
                 .utf8_index_(agent, p)
                 .expect("p splits two surrogates into unmatched pairs");
             // 20. Let T be the substring of S from p to size.
-            let t = s.as_wtf8_(agent).slice(p_utf8, size);
+            // `size` is a UTF-16 length; the slice end must be a WTF-8 byte
+            // index. p..size always runs to the end, so slice from p_utf8.
+            // (Passing `size` directly mixed a byte start with a UTF-16 end and
+            // panicked in `Wtf8::slice` on any multi-byte tail.)
+            let t = s.as_wtf8_(agent).slice_from(p_utf8);
             let mut t_buf = Wtf8Buf::with_capacity(t.len());
             t_buf.push_wtf8(t);
             let t = String::from_wtf8_buf(agent, t_buf, gc);

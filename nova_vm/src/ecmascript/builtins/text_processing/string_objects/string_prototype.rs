@@ -2095,24 +2095,18 @@ impl StringPrototype {
 
         // 12. If from ≥ to, return the empty String.
         // 13. Return the substring of S from from to to.
-        let substring = match (from, to) {
-            (None, _) => "",
+        // `wtf8_substring` maps the UTF-16 bounds to WTF-8 and tolerates a bound
+        // that splits a surrogate pair (the spec'd lone-surrogate edge).
+        let result = match (from, to) {
+            (None, _) => String::EMPTY_STRING,
             (Some(0), None) => return Ok(s.into()),
             (Some(from_idx), None) => {
-                let u8_from = s.utf8_index_(agent, from_idx).unwrap();
-                &s.to_string_lossy_(agent)[u8_from..]
+                let len = s.utf16_len_(agent);
+                wtf8_substring(agent, s, from_idx, len, gc)
             }
-            (Some(from_idx), Some(to_idx)) if from_idx >= to_idx => "",
-            (Some(from_idx), Some(to_idx)) => {
-                let u8_from = s.utf8_index_(agent, from_idx).unwrap();
-                let u8_to = s.utf8_index_(agent, to_idx).unwrap();
-                &s.to_string_lossy_(agent)[u8_from..u8_to]
-            }
+            (Some(from_idx), Some(to_idx)) => wtf8_substring(agent, s, from_idx, to_idx, gc),
         };
-        // SAFETY: The memory for `substring` (and for the WTF-8 representation
-        // of `s`) won't be moved or deallocated before this function returns.
-        let substring: &'static str = unsafe { core::mem::transmute(substring) };
-        Ok(String::from_str(agent, substring, gc).into())
+        Ok(result.into())
     }
 
     /// ### [22.1.3.23 String.prototype.split ( separator, limit )](https://tc39.es/ecma262/#sec-string.prototype.split)
@@ -2465,22 +2459,13 @@ impl StringPrototype {
         // 9. Let to be max(finalStart, finalEnd).
         let to = final_start.max(final_end);
 
-        // 10. Return the substring of S from from to to.
-        let u8_from = if from != len {
-            s.utf8_index_(agent, from).unwrap()
-        } else {
-            s.len_(agent)
-        };
-        let u8_to = if to != len {
-            s.utf8_index_(agent, to).unwrap()
-        } else {
-            s.len_(agent)
-        };
-        let substring = &s.to_string_lossy_(agent)[u8_from..u8_to];
-        // SAFETY: The memory for `substring` (and for the WTF-8 representation
-        // of `s`) won't be moved or deallocated before this function returns.
-        let substring: &'static str = unsafe { core::mem::transmute(substring) };
-        Ok(String::from_str(agent, substring, gc.into_nogc()).into())
+        // 10. Return the substring of S from from to to. `wtf8_substring`
+        // tolerates a bound that splits a surrogate pair (yielding the spec'd
+        // lone surrogate) rather than panicking on the absent byte boundary.
+        let s = s.unbind();
+        let gc = gc.into_nogc();
+        let s = s.bind(gc);
+        Ok(wtf8_substring(agent, s, from, to, gc).into())
     }
 
     /// ### [22.1.3.26 String.prototype.toLocaleLowerCase ( \[ reserved1 \[ , reserved2 \] \] )](https://tc39.es/ecma262/#sec-string.prototype.tolocalelowercase)
@@ -2838,15 +2823,12 @@ impl StringPrototype {
         let int_end = (int_start + int_length).min(size);
 
         // 11. Return the substring of S from intStart to intEnd.
+        // intStart/intEnd are UTF-16 indices; `wtf8_substring` maps them to
+        // WTF-8 bytes (the previous direct byte-index slice corrupted, and
+        // panicked on, any non-ASCII content).
         let gc = gc.into_nogc();
         let s = scoped_s.get(agent).bind(gc);
-        let s_str = s.to_string_lossy_(agent);
-        Ok(String::from_string(
-            agent,
-            s_str[int_start as usize..int_end as usize].to_string(),
-            gc,
-        )
-        .into())
+        Ok(wtf8_substring(agent, s, int_start as usize, int_end as usize, gc).into())
     }
 
     /// ### [B.2.2.2 String.prototype.anchor ( name )](https://tc39.es/ecma262/#sec-string.prototype.anchor)
@@ -3138,6 +3120,56 @@ impl StringPrototype {
             data: PrimitiveObjectData::SmallString(SmallString::EMPTY),
         };
     }
+}
+
+/// Build the substring `s[from..to)` addressed by **UTF-16** code-unit indices,
+/// as a new String. `from` and `to` must already be clamped to `0..=utf16_len`.
+///
+/// When a boundary lands in the middle of a surrogate pair, [`String::utf8_index_`]
+/// has no WTF-8 byte offset to return (the astral scalar is one 4-byte sequence,
+/// not two 3-byte surrogate sequences) and yields `None`. The spec'd result of
+/// such a split is a string carrying a *lone* surrogate at that edge, so widen to
+/// the nearest clean byte boundary and synthesize the exposed half. Slicing
+/// builtins used to `.unwrap()` that `None` and panic here instead.
+fn wtf8_substring<'gc>(
+    agent: &mut Agent,
+    s: String,
+    from: usize,
+    to: usize,
+    gc: NoGcScope<'gc, '_>,
+) -> String<'gc> {
+    if from >= to {
+        return String::EMPTY_STRING;
+    }
+    // Left edge: clean byte offset, plus the lone *low* surrogate when `from`
+    // splits a pair (the latter half stays with the result).
+    let (byte_from, lead) = match s.utf8_index_(agent, from) {
+        Some(b) => (b, None),
+        None => (
+            s.utf8_index_(agent, from + 1).expect("char after a split is a boundary"),
+            Some(s.char_code_at_(agent, from)),
+        ),
+    };
+    // Right edge: clean byte offset, plus the lone *high* surrogate when `to`
+    // splits a pair (the former half stays with the result).
+    let (byte_to, trail) = match s.utf8_index_(agent, to) {
+        Some(b) => (b, None),
+        None => (
+            s.utf8_index_(agent, to - 1).expect("char before a split is a boundary"),
+            Some(s.char_code_at_(agent, to - 1)),
+        ),
+    };
+    let mut buf = Wtf8Buf::new();
+    if let Some(low) = lead {
+        buf.push(low);
+    }
+    if byte_from < byte_to {
+        buf.push_wtf8(s.as_wtf8_(agent).slice(byte_from, byte_to));
+    }
+    if let Some(high) = trail {
+        buf.push(high);
+    }
+    String::from_wtf8_buf(agent, buf, gc)
 }
 
 /// ### [22.1.3.17.1 StringPaddingBuiltinsImpl ( O, maxLength, fillString, placement )](https://tc39.es/ecma262/#sec-stringpaddingbuiltinsimpl)

@@ -619,7 +619,13 @@ pub(crate) fn reg_exp_builtin_exec<'a>(
         return Ok(None);
         // ii. Set lastIndex to AdvanceStringIndex(S, lastIndex, fullUnicode).
     }
-    let last_index = full_match.start();
+    // `full_match.start()` is a WTF-8 byte offset (the matcher runs over the
+    // string's bytes). The `index` property and lastIndex are UTF-16 code-unit
+    // offsets, so convert — exactly as the end index `e` is converted just
+    // below. Storing the raw byte offset made `.index`, `search`, and the
+    // @@replace/@@split slice positions derived from it wrong for any string
+    // with a non-ASCII character at or before the match.
+    let last_index = s.utf16_index_(&agent.heap.strings, full_match.start());
     // e. Else,
     // i. Assert: r is a MatchState.
     // ii. Set matchSucceeded to true.
