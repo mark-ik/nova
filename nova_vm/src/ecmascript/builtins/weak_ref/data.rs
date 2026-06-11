@@ -5,7 +5,7 @@
 use crate::{
     ecmascript::{execution::WeakKey, types::OrdinaryObject},
     engine::bindable_handle,
-    heap::{CompactionLists, HeapMarkAndSweep, WorkQueues},
+    heap::{CompactionLists, HeapMarkAndSweep, HeapSweepWeakReference, WorkQueues},
 };
 
 #[derive(Default, Debug, Clone)]
@@ -49,6 +49,13 @@ impl HeapMarkAndSweep for WeakRefHeapData<'static> {
             kept_alive: _,
         } = self;
         object_index.sweep_values(compactions);
-        value.sweep_values(compactions);
+        // The target is a *weak* reference: if it was collected this cycle
+        // (not marked, because [[KeptAlive]] was clear), null it so `Deref`
+        // observes the death; otherwise shift its index. Using the plain
+        // `sweep_values` here would shift a dangling index for a collected
+        // target. (serval reflector liveness, G1.)
+        if let Some(target) = value.take() {
+            *value = target.sweep_weak_reference(compactions);
+        }
     }
 }

@@ -8,12 +8,14 @@ pub(crate) use data::*;
 
 use crate::{
     ecmascript::{
-        InternalMethods, InternalSlots, Object, OrdinaryObject, ProtoIntrinsics, execution::Agent,
+        InternalMethods, InternalSlots, Object, OrdinaryObject, ProtoIntrinsics, WeakKey, WeakRef,
+        WeakRefHeapData,
+        execution::{Agent, add_to_kept_objects, clear_kept_objects},
         object_handle,
     },
     engine::Bindable,
     heap::{
-        ArenaAccess, ArenaAccessMut, BaseIndex, CompactionLists, HeapMarkAndSweep,
+        ArenaAccess, ArenaAccessMut, BaseIndex, CompactionLists, CreateHeapData, HeapMarkAndSweep,
         HeapSweepWeakReference, WorkQueues, arena_vec_access,
     },
 };
@@ -43,6 +45,46 @@ impl<'a> EmbedderObject<'a> {
     pub fn embedder_data(self, agent: &Agent) -> u64 {
         self.get(agent).embedder_data
     }
+
+    /// Create a [`WeakRef`] weakly targeting this embedder object, for host-side
+    /// liveness tracking (the serval reflector cache). The returned `WeakRef`
+    /// must itself be rooted (e.g. in a `Global`); its target — this embedder
+    /// object — is held *weakly*, so it can be collected once nothing else
+    /// references it. This is the native/embedder entry point; the JS `WeakRef`
+    /// constructor is for script. Mirrors the constructor's `AddToKeptObjects`,
+    /// so the target survives until the next [`clear_weak_ref_kept_objects`].
+    pub fn into_weak_ref(self, agent: &mut Agent) -> WeakRef<'static> {
+        let target = WeakKey::EmbedderObject(self.unbind());
+        let weak_ref = agent.heap.create(WeakRefHeapData::default());
+        weak_ref.set_target(agent, target);
+        add_to_kept_objects(agent, target);
+        weak_ref
+    }
+
+    /// Dereference a [`WeakRef`] created by [`into_weak_ref`](Self::into_weak_ref):
+    /// the still-live embedder object, or `None` if it has been collected. Like
+    /// the JS `WeakRef.prototype.deref`, observing a live target keeps it alive
+    /// until the next [`clear_weak_ref_kept_objects`].
+    pub fn from_weak_ref(agent: &mut Agent, weak_ref: WeakRef) -> Option<EmbedderObject<'static>> {
+        match weak_ref.get_target(agent) {
+            Some(WeakKey::EmbedderObject(eo)) => {
+                add_to_kept_objects(agent, WeakKey::EmbedderObject(eo));
+                Some(eo.unbind())
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Clear the WeakRef "kept alive" set (the spec's `ClearKeptObjects`, 9.10).
+///
+/// The embedder calls this when a synchronous execution sequence completes (the
+/// microtask checkpoint), so embedder objects only observed through a
+/// [`WeakRef`](EmbedderObject::from_weak_ref) since the last call become
+/// collectable again. Without it, every dereferenced reflector would be pinned
+/// for the engine's lifetime.
+pub fn clear_weak_ref_kept_objects(agent: &mut Agent) {
+    clear_kept_objects(agent);
 }
 
 impl<'a> InternalSlots<'a> for EmbedderObject<'a> {
