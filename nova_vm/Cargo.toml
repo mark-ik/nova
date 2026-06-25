@@ -12,7 +12,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-ahash = { workspace = true }
 ecmascript_atomics = { workspace = true, optional = true }
 fast-float = { workspace = true }
 hashbrown = { workspace = true }
@@ -36,10 +35,22 @@ soavec = { workspace = true }
 soavec_derive = { workspace = true }
 sonic-rs = { workspace = true, optional = true }
 unicode-normalization = { workspace = true }
-usdt = { workspace = true }
 wtf8 = { workspace = true }
 xsum = { workspace = true }
 temporal_rs = { workspace = true, optional = true }
+
+# Browser wasm uses JavaScript's crypto source. `ahash` deliberately omits its
+# runtime RNG on wasm, leaving only `rand`'s getrandom 0.4 branch to configure.
+[target.'cfg(target_family = "wasm")'.dependencies]
+ahash = { workspace = true, features = ["std"] }
+ecmascript_atomics = { workspace = true, optional = true, features = ["single-threaded"] }
+getrandom_03 = { package = "getrandom", version = "=0.3.4", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "=0.4.3", features = ["wasm_js"] }
+
+# USDT emits native architecture-specific probes and has no WebAssembly target.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ahash = { workspace = true, features = ["std", "runtime-rng"] }
+usdt = { workspace = true }
 
 [features]
 default = [
@@ -106,4 +117,3 @@ proposal-temporal = ["temporal"]
 
 [build-dependencies]
 small_string = { path = "../small_string", version = "1.0.0" }
-usdt = { workspace = true }

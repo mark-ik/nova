@@ -90,6 +90,7 @@ pub mod engine;
 pub mod heap;
 
 /// DTrace / SystemTap USDT probes in Nova VM.
+#[cfg(not(target_family = "wasm"))]
 #[usdt::provider(provider = "nova_vm")]
 mod ndt {
     // Start probes in alphabetical order.
@@ -115,6 +116,37 @@ mod ndt {
     fn script_evaluation_done(id: u64) {}
 }
 
+/// WebAssembly has no USDT provider. Keep the internal probe call surface as
+/// no-op macros so the interpreter stays identical across native and wasm.
+#[cfg(target_family = "wasm")]
+mod ndt {
+    macro_rules! noop_probe {
+        ($args:expr) => {{
+            // Match USDT's lazy-argument behavior: do not evaluate the closure.
+            let _ = &$args;
+        }};
+    }
+
+    pub(crate) use noop_probe as builtin_call_done;
+    pub(crate) use noop_probe as builtin_call_start;
+    pub(crate) use noop_probe as builtin_constructor_done;
+    pub(crate) use noop_probe as builtin_constructor_start;
+    pub(crate) use noop_probe as eval_evaluation_done;
+    pub(crate) use noop_probe as eval_evaluation_start;
+    pub(crate) use noop_probe as gc_done;
+    pub(crate) use noop_probe as gc_start;
+    pub(crate) use noop_probe as javascript_call_done;
+    pub(crate) use noop_probe as javascript_call_start;
+    pub(crate) use noop_probe as javascript_constructor_done;
+    pub(crate) use noop_probe as javascript_constructor_start;
+    pub(crate) use noop_probe as job_evaluation_done;
+    pub(crate) use noop_probe as job_evaluation_start;
+    pub(crate) use noop_probe as module_evaluation_done;
+    pub(crate) use noop_probe as module_evaluation_start;
+    pub(crate) use noop_probe as script_evaluation_done;
+    pub(crate) use noop_probe as script_evaluation_start;
+}
+
 /// Function that should be called as the very first thing in `fn main()` of any
 /// application using Nova JavaScript engine. This function registers USDT
 /// probes with the DTrace kernel module on OS's that have one and is required
@@ -125,4 +157,11 @@ mod ndt {
 /// ```
 ///
 /// # usdt documentation
+#[cfg(not(target_family = "wasm"))]
 pub use usdt::register_probes;
+
+/// WebAssembly no-op counterpart to [`usdt::register_probes`].
+#[cfg(target_family = "wasm")]
+pub fn register_probes() -> Result<(), std::io::Error> {
+    Ok(())
+}

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["nova_cli", "nova_vm", "small_string", "tests"]
+members = ["nova_cli", "nova_vm", "small_string", "support/ecmascript_atomics", "tests"]
 exclude = ["nova_lint"]
 
 [workspace.package]
@@ -15,12 +15,12 @@ categories = ["development-tools"]
 authors = ["The Nova Team"]
 
 [workspace.dependencies]
-ahash = "=0.8.12"
+ahash = { version = "=0.8.12", default-features = false }
 clap = { version = "=4.6.0", features = ["derive"] }
 cliclack = "=0.5.4"
 console = "=0.16.3"
 ctrlc = "=3.5.2"
-ecmascript_atomics = { version = "=0.2.3" }
+ecmascript_atomics = { path = "support/ecmascript_atomics", version = "=0.2.3" }
 fast-float = "=0.2.0"
 # serval fork: bumped from upstream nova's `=0.17.0` to `0.17.1` to match boa
 # (synced to boa-upstream main, which floors hashbrown at 0.17.1) so the serval

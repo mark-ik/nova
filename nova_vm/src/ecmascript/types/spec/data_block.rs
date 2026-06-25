@@ -489,6 +489,7 @@ pub(crate) struct WaiterList {
     waiters: std::collections::VecDeque<Arc<WaiterRecord>>,
 }
 
+#[cfg(feature = "shared-array-buffer")]
 impl WaiterList {
     pub(crate) fn is_empty(&self) -> bool {
         self.waiters.is_empty()
@@ -524,6 +525,7 @@ pub(crate) struct WaiterLists {
     map: std::collections::HashMap<usize, WaiterList>,
 }
 
+#[cfg(feature = "shared-array-buffer")]
 impl WaiterLists {
     pub(crate) fn get_list_mut(&mut self, index: usize) -> Option<&mut WaiterList> {
         self.map.get_mut(&index)
