@@ -10,7 +10,7 @@ use crate::{
     heap::{CompactionLists, HeapMarkAndSweep, WorkQueues, sweep_side_set},
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct WeakSetHeapData<'a> {
     pub(crate) object_index: Option<OrdinaryObject<'a>>,
     /// ### \[\[WeakSetData]]

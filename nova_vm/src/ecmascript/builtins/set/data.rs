@@ -37,6 +37,19 @@ pub(crate) struct SetHeapData<'a> {
 
 bindable_handle!(SetHeapData);
 
+impl<'set, 'soa> SetHeapDataRef<'set, 'soa> {
+    pub(crate) fn cloned_data(&self) -> SetHeapData<'soa> {
+        SetHeapData {
+            set_data: RefCell::new(self.set_data.borrow().clone()),
+            values: self.values.clone(),
+            object_index: *self.object_index,
+            needs_primitive_rehashing: AtomicBool::new(
+                self.needs_primitive_rehashing.load(Ordering::Relaxed),
+            ),
+        }
+    }
+}
+
 impl HeapMarkAndSweep for SetHeapData<'static> {
     fn mark_values(&self, queues: &mut WorkQueues) {
         let Self {

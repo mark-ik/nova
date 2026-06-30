@@ -26,7 +26,7 @@ use crate::ecmascript::GlobalEnvironment;
 #[cfg(feature = "shared-array-buffer")]
 use crate::ecmascript::SharedArrayBuffer;
 #[cfg(feature = "atomics")]
-use crate::ecmascript::WaitAsyncJob;
+use crate::ecmascript::{WaitAsyncJob, WaitAsyncTimeoutJob};
 #[cfg(feature = "weak-refs")]
 use crate::ecmascript::{FinalizationRegistryCleanupJob, clear_kept_objects};
 use crate::{
@@ -56,7 +56,7 @@ use std::collections::TryReserveError;
 /// Creation options for [`GcAgent`].
 ///
 /// [`GcAgent`]: GcAgent
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct AgentOptions {
     /// Stops the Agent from performing any garbage collection.
     pub disable_gc: bool,
@@ -258,6 +258,8 @@ pub(crate) enum InnerJob {
     PromiseReaction(PromiseReactionJob),
     #[cfg(feature = "atomics")]
     WaitAsync(WaitAsyncJob),
+    #[cfg(feature = "atomics")]
+    WaitAsyncTimeout(WaitAsyncTimeoutJob),
     #[cfg(feature = "weak-refs")]
     FinalizationRegistry(FinalizationRegistryCleanupJob),
 }
@@ -314,7 +316,12 @@ impl Job {
             InnerJob::PromiseResolveThenable(job) => job.run(agent, gc),
             InnerJob::PromiseReaction(job) => job.run(agent, gc),
             #[cfg(feature = "atomics")]
-            InnerJob::WaitAsync(job) => job.run(agent, gc),
+            InnerJob::WaitAsync(job) => job.run(agent, gc.into_nogc()),
+            #[cfg(feature = "atomics")]
+            InnerJob::WaitAsyncTimeout(job) => {
+                job.run();
+                Ok(())
+            },
             #[cfg(feature = "weak-refs")]
             InnerJob::FinalizationRegistry(job) => {
                 job.run(agent, gc);
@@ -692,6 +699,7 @@ pub struct GcAgent {
 /// As long as this is not passed back into GcAgent, the Realm it represents
 /// won't be removed by the garbage collector.
 #[must_use]
+#[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct RealmRoot {
     /// Defines an index in the GcAgent::realm_roots vector that contains the
@@ -709,6 +717,18 @@ impl RealmRoot {
         let realm = agent.get_realm_by_root(self);
         realm.initialize_host_defined(&mut agent.agent, host_defined);
     }
+
+    /// Replace the Realm's \[\[HostDefined]] field.
+    ///
+    /// This is intended for snapshot clones that need fresh host-owned state.
+    pub fn replace_host_defined(
+        &self,
+        agent: &mut GcAgent,
+        host_defined: Option<HostDefined>,
+    ) -> Option<HostDefined> {
+        let realm = agent.get_realm_by_root(self);
+        realm.replace_host_defined(&mut agent.agent, host_defined)
+    }
 }
 
 impl GcAgent {
@@ -718,6 +738,27 @@ impl GcAgent {
             agent: Agent::new(options, host_hooks),
             realm_roots: Vec::with_capacity(1),
         }
+    }
+
+    /// Clone an idle Agent and heap for snapshot-style reuse.
+    ///
+    /// The clone receives the supplied host hooks and starts with empty stack
+    /// root state. Realm \[\[HostDefined]] slots are cleared so embedders can
+    /// install fresh host-owned state before running code in the clone.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if JavaScript or bytecode execution is active.
+    pub fn snapshot_clone(&self, host_hooks: &'static dyn HostHooks) -> Self {
+        let mut clone = Self {
+            agent: self.agent.clone_for_snapshot(host_hooks),
+            realm_roots: self.realm_roots.clone(),
+        };
+        let rooted_realms = clone.realm_roots.clone();
+        for realm in rooted_realms.into_iter().flatten() {
+            realm.replace_host_defined(&mut clone.agent, None);
+        }
+        clone
     }
 
     /// Root the given realm: this stores the [`Realm`] in a list of roots and returns a RealmRoot object that
@@ -866,7 +907,6 @@ impl GcAgent {
 pub struct Agent {
     pub(crate) heap: Heap,
     pub(crate) options: AgentOptions,
-    #[expect(dead_code)]
     symbol_id: usize,
     pub(crate) global_symbol_registry: AHashMap<String<'static>, Symbol<'static>>,
     pub(crate) host_hooks: &'static dyn HostHooks,
@@ -897,6 +937,32 @@ pub struct Agent {
 }
 
 impl Agent {
+    fn clone_for_snapshot(&self, host_hooks: &'static dyn HostHooks) -> Self {
+        assert!(
+            self.execution_context_stack.is_empty(),
+            "cannot clone an Agent while JavaScript is running"
+        );
+        assert!(
+            self.vm_stack.is_empty(),
+            "cannot clone an Agent while a VM is running"
+        );
+        Self {
+            heap: self.heap.clone(),
+            options: self.options.clone(),
+            symbol_id: self.symbol_id,
+            global_symbol_registry: self.global_symbol_registry.clone(),
+            host_hooks,
+            execution_context_stack: Vec::new(),
+            stack_refs: RefCell::new(Vec::with_capacity(64)),
+            stack_ref_collections: RefCell::new(Vec::with_capacity(32)),
+            vm_stack: Vec::with_capacity(16),
+            #[cfg(feature = "weak-refs")]
+            kept_alive: false,
+            private_names_counter: self.private_names_counter,
+            module_async_evaluation_count: self.module_async_evaluation_count,
+        }
+    }
+
     pub(crate) fn new(options: AgentOptions, host_hooks: &'static dyn HostHooks) -> Self {
         Self {
             heap: Heap::new(),

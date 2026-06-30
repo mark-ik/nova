@@ -10,7 +10,7 @@ use std::{
     hint::assert_unchecked,
     sync::{
         Arc, Condvar, Mutex, MutexGuard, WaitTimeoutResult,
-        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -81,6 +81,28 @@ impl Drop for DataBlock {
             let layout = Layout::from_size_align(self.byte_length, 8).unwrap();
             unsafe { dealloc(ptr.as_ptr(), layout) }
         }
+    }
+}
+
+impl Clone for DataBlock {
+    fn clone(&self) -> Self {
+        let Some(src) = self.ptr else {
+            return Self::DETACHED_DATA_BLOCK;
+        };
+        let Some(block) = Self::new(self.byte_length) else {
+            handle_alloc_error(Layout::from_size_align(self.byte_length, 8).unwrap());
+        };
+        if self.byte_length > 0 {
+            // SAFETY: both allocations are valid for byte_length bytes and do not overlap.
+            unsafe {
+                block
+                    .ptr
+                    .expect("non-empty DataBlock clone has allocation")
+                    .as_ptr()
+                    .copy_from_nonoverlapping(src.as_ptr(), self.byte_length);
+            }
+        }
+        block
     }
 }
 
@@ -426,10 +448,22 @@ impl SharedDataBlockMaxByteLength {
 }
 
 #[cfg(feature = "shared-array-buffer")]
-#[derive(Default)]
+#[derive(Debug)]
 pub(crate) struct WaiterRecord {
     condvar: Condvar,
     notified: AtomicBool,
+    result: AtomicU8,
+}
+
+#[cfg(feature = "shared-array-buffer")]
+impl Default for WaiterRecord {
+    fn default() -> Self {
+        Self {
+            condvar: Condvar::default(),
+            notified: AtomicBool::default(),
+            result: AtomicU8::new(u8::MAX),
+        }
+    }
 }
 
 #[cfg(feature = "shared-array-buffer")]
@@ -448,6 +482,7 @@ impl WaiterRecord {
         let lock_result = self
             .condvar
             .wait_while(guard, |_| !self.notified.load(Ordering::Relaxed));
+
         match lock_result {
             Ok(_) => (),
             Err(e) => panic!(
@@ -472,14 +507,40 @@ impl WaiterRecord {
             ),
         }
     }
+
+    pub(crate) fn is_notified(&self) -> bool {
+        self.notified.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_result(&self, result: WaitResult) {
+        self.result.store(result as u8, Ordering::Relaxed);
+    }
+
+    pub(crate) fn get_result(&self) -> Option<WaitResult> {
+        match self.result.load(Ordering::Relaxed) {
+            0 => Some(WaitResult::Ok),
+            1 => Some(WaitResult::TimedOut),
+            _ => None,
+        }
+    }
 }
 
-/// Result of an `Atomics.wait` or `Atomics.waitAsync` operation.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(feature = "shared-array-buffer")]
+#[repr(u8)]
 pub(crate) enum WaitResult {
-    Ok,
-    TimedOut,
+    Ok = 0,
+    TimedOut = 1,
+}
+
+#[cfg(feature = "shared-array-buffer")]
+impl WaitResult {
+    pub(crate) fn to_string(self) -> crate::ecmascript::String<'static> {
+        match self {
+            WaitResult::Ok => crate::ecmascript::BUILTIN_STRING_MEMORY.ok,
+            WaitResult::TimedOut => crate::ecmascript::BUILTIN_STRING_MEMORY.timed_out,
+        }
+    }
 }
 
 #[cfg(feature = "shared-array-buffer")]
@@ -503,12 +564,12 @@ impl WaiterList {
         self.waiters.push_back(w);
     }
 
-    pub(crate) fn remove(&mut self, w: Arc<WaiterRecord>) -> bool {
+    pub(crate) fn remove(&mut self, w: &Arc<WaiterRecord>) -> bool {
         let Some(index) = self
             .waiters
             .iter()
             .enumerate()
-            .find(|(_, e)| Arc::ptr_eq(e, &w))
+            .find(|(_, e)| Arc::ptr_eq(e, w))
             .map(|(i, _)| i)
         else {
             return false;
@@ -535,7 +596,7 @@ impl WaiterLists {
         self.map.entry(index).or_default().push(w);
     }
 
-    pub(crate) fn remove_from_list(&mut self, index: usize, w: Arc<WaiterRecord>) {
+    pub(crate) fn remove_from_list(&mut self, index: usize, w: &Arc<WaiterRecord>) {
         match self.map.entry(index) {
             Entry::Occupied(mut entry) => {
                 if entry.get_mut().remove(w) && entry.get().is_empty() {
@@ -1182,13 +1243,7 @@ pub(crate) fn create_byte_data_block<'a>(
     // 1. If size > 2**53 - 1, throw a RangeError exception.
     if let Some(db) = usize::try_from(size)
         .ok()
-        .and_then(|size| {
-            if size as u64 > DATA_BLOCK_SIZE_LIMIT {
-                None
-            } else {
-                Some(size)
-            }
-        })
+        .filter(|&size| size as u64 <= DATA_BLOCK_SIZE_LIMIT)
         .and_then(DataBlock::new)
     {
         // 2. Let db be a new Data Block value consisting of size bytes.
@@ -1232,13 +1287,7 @@ pub(crate) unsafe fn create_shared_byte_data_block<'a>(
     //    RangeError exception.
     if let Some(db) = usize::try_from(size)
         .ok()
-        .and_then(|size| {
-            if size as u64 > DATA_BLOCK_SIZE_LIMIT {
-                None
-            } else {
-                Some(size)
-            }
-        })
+        .filter(|&size| size as u64 <= DATA_BLOCK_SIZE_LIMIT)
         .and_then(|_| {
             // SAFETY: function precondition
             unsafe {
@@ -1340,8 +1389,12 @@ pub(crate) fn copy_shared_data_block_bytes(
 ) {
     // 1. Assert: fromBlock and toBlock are distinct values.
     debug_assert!(unsafe {
-        to_block.ptr.as_ptr().add(to_block.max_byte_length()) <= from_block.ptr.as_ptr()
-            || from_block.ptr.as_ptr().add(from_block.max_byte_length()) <= to_block.ptr.as_ptr()
+        to_block.ptr.as_ptr().byte_add(to_block.max_byte_length()) <= from_block.ptr.as_ptr()
+            || from_block
+                .ptr
+                .as_ptr()
+                .byte_add(from_block.max_byte_length())
+                <= to_block.ptr.as_ptr()
     });
     // 2. Let fromSize be the number of bytes in fromBlock.
     let from_size = from_block.max_byte_length();

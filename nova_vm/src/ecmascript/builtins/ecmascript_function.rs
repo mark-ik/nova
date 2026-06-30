@@ -239,7 +239,7 @@ impl<'ast> FunctionAstRef<'ast> {
 }
 
 /// ## [10.2 ECMAScript Function Objects](https://tc39.es/ecma262/#sec-ecmascript-function-objects)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ECMAScriptFunctionObjectHeapData<'a> {
     /// \[\[Environment]]
     pub(crate) environment: Environment<'a>,

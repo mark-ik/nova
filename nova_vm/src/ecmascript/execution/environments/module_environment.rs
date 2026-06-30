@@ -33,7 +33,7 @@ use super::{
 ///
 /// NOTE: There is no data-wise difference between a DeclarativeEnvironment and
 /// a ModuleEnvironment, so we treat them exactly the same way.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ModuleEnvironmentRecord {
     /// Module Environment Records support all of the Declarative Environment
     /// Record methods listed in [Table 16](https://tc39.es/ecma262/#table-abstract-methods-of-environment-records)
@@ -43,7 +43,7 @@ pub(crate) struct ModuleEnvironmentRecord {
     indirect_bindings: AHashMap<String<'static>, IndirectBinding<'static>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct IndirectBinding<'a> {
     /// ### \[\[M]]
     ///

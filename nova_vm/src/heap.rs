@@ -178,6 +178,134 @@ pub(crate) struct Heap {
     pub(crate) alloc_counter: usize,
 }
 
+fn clone_soa_with<T, F>(source: &SoAVec<T>, mut clone_item: F) -> SoAVec<T>
+where
+    T: SoAble,
+    F: for<'a> FnMut(T::Ref<'a>) -> T,
+{
+    let mut cloned = SoAVec::with_capacity(source.len()).expect("Failed to allocate Heap clone");
+    for index in 0..source.len() {
+        cloned
+            .push(clone_item(
+                source.get(index).expect("SoAVec index in bounds"),
+            ))
+            .expect("Failed to push Heap clone entry");
+    }
+    cloned
+}
+
+impl Clone for Heap {
+    fn clone(&self) -> Self {
+        Self {
+            #[cfg(feature = "array-buffer")]
+            array_buffers: self.array_buffers.clone(),
+            #[cfg(feature = "array-buffer")]
+            array_buffer_detach_keys: self.array_buffer_detach_keys.clone(),
+            arrays: clone_soa_with(&self.arrays, |item| ArrayHeapData {
+                elements: *item.elements,
+                object_index: *item.object_index,
+            }),
+            array_iterators: self.array_iterators.clone(),
+            async_generators: self.async_generators.clone(),
+            await_reactions: self.await_reactions.clone(),
+            bigints: self.bigints.clone(),
+            bound_functions: self.bound_functions.clone(),
+            builtin_constructors: self.builtin_constructors.clone(),
+            builtin_functions: self.builtin_functions.clone(),
+            caches: self.caches.clone(),
+            #[cfg(feature = "date")]
+            dates: self.dates.clone(),
+            #[cfg(feature = "temporal")]
+            instants: self.instants.clone(),
+            #[cfg(feature = "temporal")]
+            durations: self.durations.clone(),
+            #[cfg(feature = "temporal")]
+            plain_times: self.plain_times.clone(),
+            ecmascript_functions: self.ecmascript_functions.clone(),
+            elements: self.elements.clone(),
+            embedder_objects: self.embedder_objects.clone(),
+            environments: self.environments.clone(),
+            errors: self.errors.clone(),
+            executables: self.executables.clone(),
+            finalization_registrys: clone_soa_with(&self.finalization_registrys, |item| {
+                item.cloned_data()
+            }),
+            generators: self.generators.clone(),
+            globals: RefCell::new(self.globals.borrow().clone()),
+            maps: clone_soa_with(&self.maps, |item| item.cloned_data()),
+            map_iterators: self.map_iterators.clone(),
+            numbers: self.numbers.clone(),
+            object_shapes: self.object_shapes.clone(),
+            object_shape_transitions: self.object_shape_transitions.clone(),
+            prototype_shapes: self.prototype_shapes.clone(),
+            objects: self.objects.clone(),
+            primitive_objects: self.primitive_objects.clone(),
+            promise_reaction_records: self.promise_reaction_records.clone(),
+            promise_resolving_functions: self.promise_resolving_functions.clone(),
+            promise_finally_functions: self.promise_finally_functions.clone(),
+            promises: self.promises.clone(),
+            proxies: self.proxies.clone(),
+            realms: self.realms.clone(),
+            promise_group_records: self.promise_group_records.clone(),
+            #[cfg(feature = "regexp")]
+            regexps: self.regexps.clone(),
+            #[cfg(feature = "regexp")]
+            regexp_string_iterators: self.regexp_string_iterators.clone(),
+            #[cfg(feature = "set")]
+            sets: clone_soa_with(&self.sets, |item| item.cloned_data()),
+            #[cfg(feature = "set")]
+            set_iterators: self.set_iterators.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_array_buffers: self.shared_array_buffers.clone(),
+            symbols: self.symbols.clone(),
+            #[cfg(feature = "array-buffer")]
+            typed_arrays: self.typed_arrays.clone(),
+            #[cfg(feature = "array-buffer")]
+            typed_array_byte_lengths: self.typed_array_byte_lengths.clone(),
+            #[cfg(feature = "array-buffer")]
+            typed_array_byte_offsets: self.typed_array_byte_offsets.clone(),
+            #[cfg(feature = "array-buffer")]
+            typed_array_array_lengths: self.typed_array_array_lengths.clone(),
+            #[cfg(feature = "array-buffer")]
+            data_views: self.data_views.clone(),
+            #[cfg(feature = "array-buffer")]
+            data_view_byte_lengths: self.data_view_byte_lengths.clone(),
+            #[cfg(feature = "array-buffer")]
+            data_view_byte_offsets: self.data_view_byte_offsets.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_typed_arrays: self.shared_typed_arrays.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_typed_array_byte_lengths: self.shared_typed_array_byte_lengths.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_typed_array_byte_offsets: self.shared_typed_array_byte_offsets.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_typed_array_array_lengths: self.shared_typed_array_array_lengths.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_data_views: self.shared_data_views.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_data_view_byte_lengths: self.shared_data_view_byte_lengths.clone(),
+            #[cfg(feature = "shared-array-buffer")]
+            shared_data_view_byte_offsets: self.shared_data_view_byte_offsets.clone(),
+            #[cfg(feature = "weak-refs")]
+            weak_maps: self.weak_maps.clone(),
+            #[cfg(feature = "weak-refs")]
+            weak_refs: self.weak_refs.clone(),
+            #[cfg(feature = "weak-refs")]
+            weak_sets: self.weak_sets.clone(),
+            modules: self.modules.clone(),
+            module_request_records: self.module_request_records.clone(),
+            source_text_module_records: self.source_text_module_records.clone(),
+            scripts: self.scripts.clone(),
+            string_iterators: self.string_iterators.clone(),
+            source_codes: self.source_codes.clone(),
+            strings: self.strings.clone(),
+            string_lookup_table: self.string_lookup_table.clone(),
+            string_hasher: self.string_hasher.clone(),
+            alloc_counter: self.alloc_counter,
+        }
+    }
+}
+
 pub(crate) trait CreateHeapData<T, F> {
     /// Creates a [`Value`] from the given data. Allocating the data is **not**
     /// guaranteed.

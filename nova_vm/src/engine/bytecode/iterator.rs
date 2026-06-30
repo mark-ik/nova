@@ -179,7 +179,7 @@ impl<'a> ActiveIterator<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum VmIteratorRecord<'a> {
     /// Special type for iterators that do not have a callable next method.
     InvalidIterator {
@@ -527,7 +527,7 @@ impl<'a> ObjectPropertiesIterator<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ObjectPropertiesIteratorRecord<'a> {
     object: Object<'a>,
     visited_keys: PropertyKeySet<'a>,
@@ -739,7 +739,7 @@ impl<'a> ArrayValuesIterator<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ArrayValuesIteratorRecord<'a> {
     array: Array<'a>,
     index: u32,

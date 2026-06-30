@@ -19,7 +19,7 @@ use super::ObjectShape;
 
 /// Heap structure holding all property lookup caches, cache-caches, and other
 /// related features.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Caches<'a> {
     property_lookup_cache_lookup_table:
         HashTable<(PropertyKey<'a>, WeakReference<PropertyLookupCache<'a>>)>,
@@ -29,7 +29,7 @@ pub(crate) struct Caches<'a> {
     current_cache_to_populate: Option<CacheToPopulate<'a>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CacheToPopulate<'a> {
     pub(crate) receiver: Value<'a>,
     pub(crate) cache: PropertyLookupCache<'a>,
@@ -719,7 +719,7 @@ impl TryFrom<HeapRootData> for PropertyLookupCache<'_> {
 
 const N: usize = 4;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PropertyLookupCacheRecord<'a> {
     shapes: [Option<ObjectShape<'a>>; N],
     offsets: [PropertyOffset; N],
@@ -884,7 +884,7 @@ impl PropertyOffset {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(transparent)]
 pub(crate) struct PropertyLookupCacheRecordPrototypes<'a> {
     prototypes: [Option<Object<'a>>; N],

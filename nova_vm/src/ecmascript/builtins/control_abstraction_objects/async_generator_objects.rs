@@ -348,7 +348,7 @@ impl<'a> CreateHeapData<AsyncGeneratorHeapData<'a>, AsyncGenerator<'a>> for Heap
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct AsyncGeneratorHeapData<'a> {
     pub(crate) object_index: Option<OrdinaryObject<'a>>,
     pub(crate) async_generator_state: Option<AsyncGeneratorState<'a>>,
@@ -363,7 +363,7 @@ pub(crate) enum AsyncGeneratorAwaitKind {
     Yield,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum AsyncGeneratorState<'a> {
     SuspendedStart {
         vm: SuspendedVm,
@@ -433,7 +433,7 @@ impl AsyncGeneratorState<'_> {
 /// An AsyncGeneratorRequest is a Record value used to store information about
 /// how an async generator should be resumed and contains capabilities for
 /// fulfilling or rejecting the corresponding promise.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AsyncGeneratorRequest<'a> {
     /// \[\[Completion]]
     pub(crate) completion: AsyncGeneratorRequestCompletion<'a>,

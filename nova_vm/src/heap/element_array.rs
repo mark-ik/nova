@@ -1217,7 +1217,7 @@ impl<'a> ElementDescriptor<'a> {
 
 bindable_handle!(ElementDescriptor);
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct ElementArray<const N: usize> {
     pub values: Vec<[Option<Value<'static>>; N]>,
     pub descriptors: AHashMap<ElementIndex<'static>, AHashMap<u32, ElementDescriptor<'static>>>,
@@ -1424,7 +1424,7 @@ pub(crate) type ElementArray2Pow24 = ElementArray<16777216>;
 pub(crate) type ElementArray2Pow32 = ElementArray<4294967296>;
 
 /// Element arrays of up to 16 elements
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 #[repr(transparent)]
 pub(crate) struct PropertyKeyArray<const N: usize> {
     pub keys: Vec<[Option<PropertyKey<'static>>; N]>,
@@ -1606,7 +1606,7 @@ pub(crate) type PropertyKeyArray2Pow24 = PropertyKeyArray<16777216>;
 /// Property key arrays of up to 4294967296 elements
 pub(crate) type PropertyKeyArray2Pow32 = PropertyKeyArray<4294967296>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ElementArrays {
     /// up to 2 elements
     pub(crate) k2pow1: PropertyKeyArray2Pow1,

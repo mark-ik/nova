@@ -10,7 +10,7 @@ use crate::{
     heap::{CompactionLists, HeapMarkAndSweep, HeapSweepWeakReference, WorkQueues},
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct WeakMapRecord<'a> {
     pub(crate) weak_map_data: AHashMap<WeakKey<'a>, Value<'a>>,
     pub(super) object_index: Option<OrdinaryObject<'a>>,

@@ -189,7 +189,7 @@ impl StringIteratorPrototype {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct StringIteratorHeapData<'a> {
     backing_object: Option<OrdinaryObject<'a>>,
     s: String<'a>,

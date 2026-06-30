@@ -120,7 +120,7 @@ impl From<usize> for ViewedArrayBufferByteOffset {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct InternalBuffer {
     data_block: DataBlock,
     /// Capacity of a resizable ArrayBuffer, or usize::MAX if the buffer is not
@@ -177,7 +177,7 @@ impl InternalBuffer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ArrayBufferHeapData<'a> {
     pub(crate) object_index: Option<OrdinaryObject<'a>>,
     pub(super) buffer: InternalBuffer,

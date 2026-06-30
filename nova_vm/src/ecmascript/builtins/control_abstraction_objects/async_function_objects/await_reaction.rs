@@ -174,7 +174,7 @@ impl<'a> From<SourceTextModule<'a>> for AsyncExecutable<'a> {
 
 bindable_handle!(AsyncExecutable);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AwaitReactionRecord<'a> {
     pub(crate) vm: Option<SuspendedVm>,
     pub(crate) async_executable: Option<AsyncExecutable<'a>>,

@@ -115,7 +115,7 @@ impl From<usize> for RegExpLastIndex {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RegExpHeapData<'a> {
     pub(super) object_index: Option<OrdinaryObject<'a>>,
     pub(super) reg_exp_matcher: Result<Regex, regress::Error>,
@@ -191,7 +191,9 @@ impl Default for RegExpHeapData<'_> {
     fn default() -> Self {
         Self {
             object_index: Default::default(),
-            reg_exp_matcher: Err(regress::Error { text: std::string::String::new() }),
+            reg_exp_matcher: Err(regress::Error {
+                text: std::string::String::new(),
+            }),
             original_source: String::EMPTY_STRING,
             original_flags: RegExpFlags::empty(),
             last_index: Default::default(),

@@ -77,6 +77,18 @@ impl<'map, 'soa> MapHeapDataMut<'map, 'soa> {
 }
 
 impl<'map, 'soa> MapHeapDataRef<'map, 'soa> {
+    pub(crate) fn cloned_data(&self) -> MapHeapData<'soa> {
+        MapHeapData {
+            map_data: RefCell::new(self.map_data.borrow().clone()),
+            values: self.values.clone(),
+            keys: self.keys.clone(),
+            object_index: *self.object_index,
+            needs_primitive_rehashing: AtomicBool::new(
+                self.needs_primitive_rehashing.load(Ordering::Relaxed),
+            ),
+        }
+    }
+
     /// ### [24.2.1.5 MapDataSize ( setData )](https://tc39.es/ecma262/#sec-setdatasize)
     ///
     /// The abstract operation MapDataSize takes argument setData (a List of either

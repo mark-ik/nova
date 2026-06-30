@@ -831,7 +831,7 @@ const fn handle_object_shape_count_overflow() -> ! {
 /// bytecode or machine code data directly, "in line"). When the lookup gets
 /// repeated, the code can check if the object shape matches and skip the
 /// property search entirely if a match is found.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ObjectShapeRecord<'a> {
     /// Prototype of the object shape.
     ///
@@ -912,7 +912,7 @@ bindable_handle!(ObjectShapeRecord);
 
 /// Data structure for finding a forward transition from an Object Shape to a
 /// larger one when a property key is added.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ObjectShapeTransitionMap<'a> {
     /// Parent Shape back-pointer.
     ///
@@ -985,7 +985,7 @@ bindable_handle!(ObjectShapeTransitionMap);
 /// > strongly. We do not mind keeping the prototype object in memory a single
 /// > extra GC collection cycle. Entries are removed from the table if no child
 /// > shape refers to them (transitively) anymore.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(transparent)]
 pub(crate) struct PrototypeShapeTable {
     table: AHashMap<Object<'static>, WeakReference<ObjectShape<'static>>>,

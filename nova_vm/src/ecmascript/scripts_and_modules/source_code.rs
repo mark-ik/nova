@@ -8,6 +8,7 @@
 //! SourceCode for their function source text.
 
 use core::fmt::Debug;
+use std::sync::Arc;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast;
@@ -148,6 +149,7 @@ impl<'a> SourceCode<'a> {
             }
         };
 
+        let source_text: Arc<str> = Arc::from(source_text);
         let mut allocator = Allocator::new();
 
         let parser_result = match source_type {
@@ -158,7 +160,7 @@ impl<'a> SourceCode<'a> {
                 // strict, then we parse the script as a module which sets
                 // strict mode on.
                 let source_type = SourceType::script().with_typescript(typescript);
-                let sloppy_result = Parser::new(&allocator, source_text, source_type).parse();
+                let sloppy_result = Parser::new(&allocator, &source_text, source_type).parse();
                 if strict {
                     let ParserReturn {
                         errors: sloppy_errors,
@@ -195,7 +197,7 @@ impl<'a> SourceCode<'a> {
                     }
 
                     let source_type = SourceType::mjs().with_typescript(typescript);
-                    let strict_result = Parser::new(&allocator, source_text, source_type).parse();
+                    let strict_result = Parser::new(&allocator, &source_text, source_type).parse();
                     if strict_result.panicked {
                         let errors = strict_result.errors;
                         return Err(errors);
@@ -208,7 +210,7 @@ impl<'a> SourceCode<'a> {
             }
             SourceCodeType::Module => {
                 let source_type = SourceType::mjs().with_typescript(typescript);
-                Parser::new(&allocator, source_text, source_type).parse()
+                Parser::new(&allocator, &source_text, source_type).parse()
             }
         };
 
@@ -250,9 +252,12 @@ impl<'a> SourceCode<'a> {
         let nodes = unsafe { core::mem::transmute::<AstNodes, AstNodes<'static>>(nodes) };
         let source_code = agent.heap.create(SourceCodeHeapData {
             source: source.unbind(),
-            scoping,
-            nodes,
-            allocator,
+            parsed: Arc::new(ParsedSourceCode {
+                scoping,
+                nodes,
+                allocator,
+                source_text,
+            }),
         });
 
         Ok(ParseResult {
@@ -282,16 +287,11 @@ impl<'a> SourceCode<'a> {
         agent.heap.source_codes.pop();
     }
 
-    pub(crate) fn get_source_text(self, agent: &Agent) -> &str {
-        // SAFETY: parse_source will always copy non-UTF-8 source texts into
-        // well-formed UTF-8.
-        unsafe {
-            self.get(agent)
-                .source
-                .get(agent)
-                .as_str()
-                .unwrap_unchecked()
-        }
+    pub(crate) fn get_source_text<'agent>(self, agent: &'agent Agent) -> &'agent str
+    where
+        'a: 'agent,
+    {
+        &self.get(agent).parsed.source_text
     }
 
     /// Access the Scoping information of the SourceCode.
@@ -299,15 +299,34 @@ impl<'a> SourceCode<'a> {
     where
         'a: 'agent,
     {
-        &self.get(agent).scoping
+        &self.get(agent).parsed.scoping
     }
 
     /// Access the AstNodes information of the SourceCode.
     pub(crate) fn get_nodes<'agent>(self, agent: &'agent Agent) -> &'agent AstNodes<'a> {
-        &self.get(agent).nodes
+        &self.get(agent).parsed.nodes
     }
 }
 
+struct ParsedSourceCode {
+    scoping: Scoping,
+    nodes: AstNodes<'static>,
+    /// The arena that contains the parsed data of the eval source.
+    #[expect(dead_code)]
+    allocator: Allocator,
+    /// The UTF-8 source text borrowed by the parsed AST.
+    ///
+    /// Nova still keeps the source as a heap string through [`SourceCodeHeapData::source`]
+    /// for GC reachability and spec-facing source lookup, but the parser AST borrows this
+    /// owned copy. That makes snapshot clones safe: cloned agents can share immutable
+    /// parsed source arenas without borrowing string memory from the source agent.
+    source_text: Arc<str>,
+}
+
+unsafe impl Send for ParsedSourceCode {}
+unsafe impl Sync for ParsedSourceCode {}
+
+#[derive(Clone)]
 pub(crate) struct SourceCodeHeapData<'a> {
     /// The source JavaScript string data the eval was called with. The string
     /// is known and required to be a HeapString because functions created
@@ -315,11 +334,7 @@ pub(crate) struct SourceCodeHeapData<'a> {
     /// string was small-string optimised and on the stack, then those
     /// references would necessarily and definitely be invalid.
     source: HeapString<'a>,
-    scoping: Scoping,
-    nodes: AstNodes<'static>,
-    /// The arena that contains the parsed data of the eval source.
-    #[expect(dead_code)]
-    allocator: Allocator,
+    parsed: Arc<ParsedSourceCode>,
 }
 
 unsafe impl Send for SourceCodeHeapData<'_> {}
@@ -345,22 +360,12 @@ bindable_handle!(SourceCodeHeapData);
 
 impl HeapMarkAndSweep for SourceCodeHeapData<'static> {
     fn mark_values(&self, queues: &mut WorkQueues) {
-        let Self {
-            source,
-            allocator: _,
-            scoping: _,
-            nodes: _,
-        } = self;
+        let Self { source, parsed: _ } = self;
         source.mark_values(queues);
     }
 
     fn sweep_values(&mut self, compactions: &CompactionLists) {
-        let Self {
-            source,
-            allocator: _,
-            scoping: _,
-            nodes: _,
-        } = self;
+        let Self { source, parsed: _ } = self;
         source.sweep_values(compactions);
     }
 }

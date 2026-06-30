@@ -118,7 +118,7 @@ impl<'a> InternalMethods<'a> for RegExpStringIterator<'a> {}
 /// properties from the %RegExpStringIteratorPrototype% intrinsic object.
 /// RegExp String Iterator instances are initially created with the internal
 /// slots listed in [Table 71](https://tc39.es/ecma262/#table-regexp-string-iterator-instance-slots).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RegExpStringIteratorRecord<'a> {
     backing_object: Option<OrdinaryObject<'a>>,
     /// \[\[IteratingRegExp]]

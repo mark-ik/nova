@@ -13,7 +13,7 @@ use crate::{
 use super::source_text_module_records::SourceTextModule;
 
 /// ### [16.2.1.5 Abstract Module Records](https://tc39.es/ecma262/#sec-abstract-module-records)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AbstractModuleRecord<'a> {
     /// ### \[\[Realm]]
     ///

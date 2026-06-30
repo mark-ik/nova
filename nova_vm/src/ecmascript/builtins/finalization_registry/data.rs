@@ -16,7 +16,7 @@ use crate::{
 /// \[\[Cells]]
 ///
 /// This maps a _cell_.\[\[WeakRefTarget]] to a _cell_.\[\[HeldValue]].
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Cells<'a> {
     /// This maps a _cell_.\[\[WeakRefTarget]] to a _cell_.\[\[HeldValue]].
     cells_weak_ref_target_to_held_value: AHashMap<WeakKey<'a>, Value<'a>>,
@@ -63,7 +63,7 @@ impl Cells<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CleanupRecord<'a> {
     cleanup_queue: Vec<Value<'a>>,
     /// \[\[CleanupCallback]]
@@ -125,7 +125,7 @@ impl<'fr> CleanupRecord<'fr> {
     }
 }
 
-#[derive(Debug, Default, SoAble)]
+#[derive(Debug, Clone, Default, SoAble)]
 pub(crate) struct FinalizationRegistryRecord<'a> {
     /// \[\[Cells]]
     pub(super) cells: Cells<'a>,
@@ -133,6 +133,16 @@ pub(crate) struct FinalizationRegistryRecord<'a> {
     pub(super) object_index: Option<OrdinaryObject<'a>>,
 }
 bindable_handle!(FinalizationRegistryRecord);
+
+impl<'fr, 'soa> FinalizationRegistryRecordRef<'fr, 'soa> {
+    pub(crate) fn cloned_data(&self) -> FinalizationRegistryRecord<'soa> {
+        FinalizationRegistryRecord {
+            cells: self.cells.clone(),
+            cleanup: self.cleanup.clone(),
+            object_index: *self.object_index,
+        }
+    }
+}
 
 impl HeapMarkAndSweep for FinalizationRegistryRecordRef<'_, 'static> {
     fn mark_values(&self, queues: &mut WorkQueues) {

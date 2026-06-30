@@ -189,7 +189,7 @@ impl HeapIndexHandle for ModuleRequest<'_> {
 bindable_handle!(ModuleRequestRecord);
 
 /// # [LoadedModuleRequest Records](https://tc39.es/ecma262/#table-loadedmodulerequest-fields)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct LoadedModuleRequestRecord<'a> {
     module_request: ModuleRequest<'a>,
     /// ### \[\[Module]]
@@ -236,7 +236,7 @@ bindable_handle!(ImportAttributeRecord);
 /// record to request the importation of a module with the relative import
 /// attributes to the resolved Module Record. The list does not contain two
 /// different Records r1 and r2 such that ModuleRequestsEqual(r1, r2) is true.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct LoadedModules<'a> {
     table: HashTable<LoadedModuleRequestRecord<'a>>,
 }

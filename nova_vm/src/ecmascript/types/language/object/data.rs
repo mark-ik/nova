@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObjectRecord<'a> {
     pub(crate) shape: ObjectShape<'a>,
     pub(crate) values: ElementIndex<'a>,

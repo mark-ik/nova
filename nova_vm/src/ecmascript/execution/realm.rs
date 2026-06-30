@@ -63,6 +63,15 @@ impl<'r> Realm<'r> {
         self.get_mut(agent).host_defined.replace(host_defined);
     }
 
+    /// Replace the \[\[HostDefined]] field and return the previous value.
+    pub fn replace_host_defined(
+        self,
+        agent: &mut Agent,
+        host_defined: Option<HostDefined>,
+    ) -> Option<HostDefined> {
+        core::mem::replace(&mut self.get_mut(agent).host_defined, host_defined)
+    }
+
     /// ### \[\[GlobalObject]]
     pub fn global_object(self, agent: &mut Agent) -> Object<'r> {
         self.get(agent).global_object
@@ -115,7 +124,7 @@ impl<'a> CreateHeapData<RealmRecord<'a>, Realm<'a>> for Heap {
 /// ECMAScript global environment, all of the ECMAScript code that is loaded
 /// within the scope of that global environment, and other associated state and
 /// resources.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RealmRecord<'a> {
     /// ### \[\[AgentSignifier]]
     ///

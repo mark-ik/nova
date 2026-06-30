@@ -126,7 +126,7 @@ impl<'a> CreateHeapData<ScriptRecord<'a>, Script<'a>> for Heap {
 /// ### [16.1.4 Script Records](https://tc39.es/ecma262/#sec-script-records)
 ///
 /// A Script Record encapsulates information about a script being evaluated.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ScriptRecord<'a> {
     /// ### \[\[Realm]]
     ///

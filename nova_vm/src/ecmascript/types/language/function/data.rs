@@ -97,7 +97,7 @@ pub(crate) struct BuiltinConstructorRecord<'a> {
     pub(crate) class_name: String<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ECMAScriptFunctionHeapData<'a> {
     pub(crate) object_index: Option<OrdinaryObject<'a>>,
     pub(crate) length: u8,

@@ -713,7 +713,7 @@ impl HeapMarkAndSweep for Environment<'static> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Environments {
     pub(crate) declarative: Vec<DeclarativeEnvironmentRecord>,
     pub(crate) function: Vec<FunctionEnvironmentRecord>,

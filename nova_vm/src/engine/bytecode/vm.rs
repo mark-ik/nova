@@ -64,7 +64,7 @@ enum ContinuationKind {
 }
 
 /// VM exception handler.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ExceptionHandler<'a> {
     /// Indicates a jump to catch block.
     CatchBlock {
@@ -94,7 +94,7 @@ pub(crate) struct Vm {
     reference: Option<Reference<'static>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SuspendedVm {
     ip: usize,
     /// Note: Stack is empty only if the code contains no local variables

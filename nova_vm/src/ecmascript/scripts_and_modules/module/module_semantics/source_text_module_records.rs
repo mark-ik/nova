@@ -39,7 +39,7 @@ use crate::{
     ndt,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// ### [16.2.1.7 Source Text Module Records](https://tc39.es/ecma262/#sec-source-text-module-records)
 pub(crate) struct SourceTextModuleRecord<'a> {
     abstract_fields: AbstractModuleRecord<'a>,
@@ -481,7 +481,7 @@ impl<'a> From<Scoped<'a, SourceTextModule<'static>>> for Scoped<'a, AbstractModu
 }
 
 /// # [ImportEntry Record Fields](https://tc39.es/ecma262/#table-importentry-record-fields)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ImportEntryRecord<'a> {
     /// ### \[\[ModuleRequest]]
     ///
@@ -2218,7 +2218,7 @@ impl HeapMarkAndSweep for ModuleRequestRecord<'static> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SourceTextModuleHeap(pub(crate) Vec<SourceTextModuleRecord<'static>>);
 
 impl Deref for SourceTextModuleHeap {

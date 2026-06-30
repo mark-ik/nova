@@ -30,7 +30,7 @@ pub(crate) enum ThisBindingStatus {
 /// ArrowFunction function and references super, its Function Environment
 /// Record also contains the state that is used to perform super method
 /// invocations from within the function.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FunctionEnvironmentRecord {
     /// ### \[\[ThisValue\]\]
     ///

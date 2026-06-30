@@ -435,20 +435,20 @@ impl HeapSweepWeakReference for Generator<'static> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct GeneratorHeapData<'a> {
     pub(crate) object_index: Option<OrdinaryObject<'a>>,
     pub(crate) generator_state: Option<GeneratorState>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SuspendedGeneratorState {
     pub(crate) vm: SuspendedVm,
     pub(crate) executable: Executable<'static>,
     pub(crate) execution_context: ExecutionContext,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum GeneratorState {
     SuspendedStart(SuspendedGeneratorState),
     SuspendedYield(SuspendedGeneratorState),
