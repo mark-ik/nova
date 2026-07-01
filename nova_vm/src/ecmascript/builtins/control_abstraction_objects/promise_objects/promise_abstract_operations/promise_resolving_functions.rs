@@ -5,7 +5,7 @@
 use crate::{
     ecmascript::{
         Agent, ArgumentsList, FunctionInternalProperties, JsResult, OrdinaryObject,
-        PromiseCapability, String, Value, function_handle,
+        PromiseCapability, PromiseReactionType, String, Value, function_handle,
     },
     engine::{Bindable, GcScope, bindable_handle},
     heap::{
@@ -14,10 +14,25 @@ use crate::{
     },
 };
 
+use super::promise_group_record::PromiseGroup;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PromiseResolvingFunctionType {
     Resolve,
     Reject,
+}
+
+/// The state of a Promise.all/allSettled/any resolve/reject **element** function
+/// (spec "Promise.all Resolve Element Functions" etc.). Unlike a plain resolving
+/// function it does not target a capability directly; when called it drives the shared
+/// [`PromiseGroup`] via [`PromiseGroup::settle`] for its `index`, guarded by
+/// `already_called` (\[\[AlreadyCalled\]\]) against a second call.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PromiseGroupElement<'a> {
+    pub(crate) promise_group: PromiseGroup<'a>,
+    pub(crate) index: u32,
+    pub(crate) reaction_type: PromiseReactionType,
+    pub(crate) already_called: bool,
 }
 
 /// ### [27.2.1.3.1 Promise Reject Functions](https://tc39.es/ecma262/#sec-promise-reject-functions)
@@ -31,6 +46,10 @@ pub(crate) struct PromiseResolvingFunctionHeapData<'a> {
     pub(crate) object_index: Option<OrdinaryObject<'a>>,
     pub(crate) promise_capability: PromiseCapability<'a>,
     pub(crate) resolve_type: PromiseResolvingFunctionType,
+    /// `Some` for a Promise combinator resolve/reject **element** function (all /
+    /// allSettled / any); `None` for a plain resolve/reject function, which targets
+    /// `promise_capability` instead.
+    pub(crate) group_element: Option<PromiseGroupElement<'a>>,
 }
 
 /// Special built-in functions created to resolve or reject native [`Promise`]
@@ -83,6 +102,26 @@ impl<'a> FunctionInternalProperties<'a> for BuiltinPromiseResolvingFunction<'a> 
     ) -> JsResult<'gc, Value<'gc>> {
         agent.check_call_depth(gc.nogc()).unbind()?;
         let arguments_list = arguments_list.get(0).bind(gc.nogc());
+        // Combinator resolve/reject element function: drive the shared PromiseGroup,
+        // guarded by [[AlreadyCalled]] so a value that settles twice counts once.
+        if let Some(element) = self.get(agent).group_element {
+            if element.already_called {
+                return Ok(Value::Undefined);
+            }
+            self.get_mut(agent)
+                .group_element
+                .as_mut()
+                .expect("group_element present")
+                .already_called = true;
+            element.promise_group.settle(
+                agent,
+                element.reaction_type,
+                element.index,
+                arguments_list.unbind(),
+                gc,
+            );
+            return Ok(Value::Undefined);
+        }
         let promise_capability = self.get(agent).promise_capability.clone();
         match self.get(agent).resolve_type {
             PromiseResolvingFunctionType::Resolve => {
@@ -140,9 +179,13 @@ impl HeapMarkAndSweep for PromiseResolvingFunctionHeapData<'static> {
             object_index,
             promise_capability,
             resolve_type: _,
+            group_element,
         } = self;
         object_index.mark_values(queues);
         promise_capability.mark_values(queues);
+        if let Some(element) = group_element {
+            element.promise_group.mark_values(queues);
+        }
     }
 
     fn sweep_values(&mut self, compactions: &CompactionLists) {
@@ -150,8 +193,12 @@ impl HeapMarkAndSweep for PromiseResolvingFunctionHeapData<'static> {
             object_index,
             promise_capability,
             resolve_type: _,
+            group_element,
         } = self;
         object_index.sweep_values(compactions);
         promise_capability.sweep_values(compactions);
+        if let Some(element) = group_element {
+            element.promise_group.sweep_values(compactions);
+        }
     }
 }

@@ -8,8 +8,9 @@ use crate::{
     ecmascript::{
         Agent, ArgumentsList, BUILTIN_STRING_MEMORY, Behaviour, Builtin, BuiltinGetter,
         BuiltinIntrinsicConstructor, ExceptionType, Function, IteratorRecord, JsError, JsResult,
-        Object, OrdinaryObject, Promise, PromiseCapability, PromiseGroupRecord, PromiseGroupType,
-        PromiseHeapData, PromiseReactionHandler, PromiseResolvingFunctionHeapData,
+        Object, OrdinaryObject, Promise, PromiseCapability, PromiseGroupElement, PromiseGroupRecord,
+        PromiseGroupType, PromiseHeapData, PromiseReactionHandler, PromiseReactionType,
+        PromiseResolvingFunctionHeapData,
         PromiseResolvingFunctionType, PromiseState, PropertyKey, ProtoIntrinsics, Realm, String,
         Value, array_create, builders::BuiltinFunctionBuilder, call, call_function, get,
         get_iterator, inner_promise_then, invoke, is_callable, is_constructor,
@@ -166,11 +167,13 @@ impl PromiseConstructor {
             object_index: None,
             promise_capability: promise_capability.clone(),
             resolve_type: PromiseResolvingFunctionType::Resolve,
+            group_element: None,
         });
         let reject_function = agent.heap.create(PromiseResolvingFunctionHeapData {
             object_index: None,
             promise_capability: promise_capability.clone(),
             resolve_type: PromiseResolvingFunctionType::Reject,
+            group_element: None,
         });
 
         // 9. Let completion be Completion(Call(executor, undefined, « resolvingFunctions.[[Resolve]], resolvingFunctions.[[Reject]] »)).
@@ -607,11 +610,13 @@ impl PromiseConstructor {
             object_index: None,
             promise_capability: promise_capability.clone(),
             resolve_type: PromiseResolvingFunctionType::Resolve,
+            group_element: None,
         });
         let reject_function = agent.heap.create(PromiseResolvingFunctionHeapData {
             object_index: None,
             promise_capability: promise_capability.clone(),
             resolve_type: PromiseResolvingFunctionType::Reject,
+            group_element: None,
         });
 
         // 3. Let obj be OrdinaryObjectCreate(%Object.prototype%).
@@ -971,23 +976,51 @@ fn perform_promise_group<'gc>(
         // j. Set onFulfilled.[[Values]] to values.
         let promise_group = promise_group_reference.get(agent).bind(gc.nogc());
         promise_group.get_mut(agent).remaining_elements_count += 1;
-        let reaction = PromiseReactionHandler::PromiseGroup {
-            index,
-            promise_group,
-        };
+        let promise_group = promise_group.unbind();
 
-        // k. Set onFulfilled.[[Capability]] to resultCapability.
-        // l. Set onFulfilled.[[RemainingElements]] to remainingElementsCount.
-        // m. Set remainingElementsCount.[[Value]] to remainingElementsCount.[[Value]] + 1.
-        // n. Perform ? Invoke(nextPromise, "then", « onFulfilled, resultCapability.[[Reject]] »).
-        inner_promise_then(
+        // Materialize the resolve + reject *element* functions (spec "Promise.all Resolve
+        // Element Functions", allSettled's resolve/reject, any's reject); each drives the
+        // shared PromiseGroup via `settle` for this `index`. `promise_capability` is unused by
+        // an element function — it carries the result promise only to keep a valid GC slot.
+        let element_slot = PromiseCapability::from_promise(promise.get(agent), true);
+        let on_fulfilled = agent.heap.create(PromiseResolvingFunctionHeapData {
+            object_index: None,
+            promise_capability: element_slot.clone(),
+            resolve_type: PromiseResolvingFunctionType::Resolve,
+            group_element: Some(PromiseGroupElement {
+                promise_group,
+                index,
+                reaction_type: PromiseReactionType::Fulfill,
+                already_called: false,
+            }),
+        });
+        let on_rejected = agent.heap.create(PromiseResolvingFunctionHeapData {
+            object_index: None,
+            promise_capability: element_slot,
+            resolve_type: PromiseResolvingFunctionType::Reject,
+            group_element: Some(PromiseGroupElement {
+                promise_group,
+                index,
+                reaction_type: PromiseReactionType::Reject,
+                already_called: false,
+            }),
+        });
+
+        // n. Perform ? Invoke(nextPromise, "then", « onFulfilled, onRejected »); invoking the
+        //    observable `then` lets an overridden/throwing `then` run and abort the iteration.
+        let mut then_args: [Value; 2] = [on_fulfilled.into(), on_rejected.into()];
+        let then_result = invoke(
             agent,
-            next_promise.unbind(),
-            reaction.unbind(),
-            reaction.unbind(),
-            None,
-            gc.nogc(),
+            Value::Promise(next_promise).unbind(),
+            BUILTIN_STRING_MEMORY.then.into(),
+            Some(ArgumentsList::from_mut_slice(&mut then_args)),
+            gc.reborrow(),
         );
+        if let Err(err) = then_result {
+            *iterator_done = true;
+            let iterator = iterator.get(agent);
+            return Err(iterator_close_with_error(agent, iterator.unbind(), err.unbind(), gc));
+        }
 
         // o. Set index to index + 1.
         index += 1;
@@ -1024,6 +1057,7 @@ fn perform_promise_race<'gc>(
             object_index: None,
             promise_capability: shared_capability.clone(),
             resolve_type: PromiseResolvingFunctionType::Resolve,
+            group_element: None,
         })
         .scope(agent, gc.nogc());
     let reject_function = agent
@@ -1032,6 +1066,7 @@ fn perform_promise_race<'gc>(
             object_index: None,
             promise_capability: shared_capability,
             resolve_type: PromiseResolvingFunctionType::Reject,
+            group_element: None,
         })
         .scope(agent, gc.nogc());
 

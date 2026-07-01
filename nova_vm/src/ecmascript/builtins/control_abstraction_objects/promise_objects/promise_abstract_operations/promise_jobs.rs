@@ -40,11 +40,13 @@ impl PromiseResolveThenableJob {
             object_index: None,
             promise_capability: promise_capability.clone(),
             resolve_type: PromiseResolvingFunctionType::Resolve,
+            group_element: None,
         });
         let reject_function = agent.heap.create(PromiseResolvingFunctionHeapData {
             object_index: None,
             promise_capability: promise_capability.clone(),
             resolve_type: PromiseResolvingFunctionType::Reject,
+            group_element: None,
         });
 
         // b. Let thenCallResult be Completion(HostCallJobCallback(then, thenable, « resolvingFunctions.[[Resolve]], resolvingFunctions.[[Reject]] »)).
