@@ -67,6 +67,13 @@ pub struct AgentOptions {
     /// calling `Atomics.wait()` will throw an error to signal that blocking the
     /// main thread is not allowed.
     pub no_block: bool,
+    /// Maximum native stack, in bytes, the Agent may consume before deep recursion
+    /// throws a `RangeError` — measured from the outermost JS entry via a stack-pointer
+    /// proxy (the address of a local), so it is portable to native *and* wasm (the
+    /// shadow stack), unlike OS stack introspection. `0` selects a conservative built-in
+    /// default; a host with a known stack (e.g. a large runner thread, or a wasm module
+    /// whose shadow-stack size it linked) should set this to that size minus a margin.
+    pub stack_limit_bytes: usize,
 }
 
 /// Result of methods that may throw a JavaScript error.
@@ -934,6 +941,11 @@ pub struct Agent {
     /// \[\[AsyncEvaluationOrder]] field of modules that are asynchronous or
     /// have asynchronous dependencies.
     module_async_evaluation_count: u32,
+    /// Stack-pointer proxy captured at the outermost JS entry (see
+    /// [`Agent::push_execution_context`]); the deep-recursion guard in
+    /// [`Agent::check_call_depth`] measures the current stack against it. `0` until the
+    /// first entry.
+    stack_base: usize,
 }
 
 impl Agent {
@@ -960,6 +972,7 @@ impl Agent {
             kept_alive: false,
             private_names_counter: self.private_names_counter,
             module_async_evaluation_count: self.module_async_evaluation_count,
+            stack_base: 0,
         }
     }
 
@@ -978,6 +991,7 @@ impl Agent {
             kept_alive: false,
             private_names_counter: 0,
             module_async_evaluation_count: 0,
+            stack_base: 0,
         }
     }
 
@@ -1273,9 +1287,24 @@ impl Agent {
     }
 
     pub(crate) fn check_call_depth<'gc>(&mut self, gc: NoGcScope<'gc, '_>) -> JsResult<'gc, ()> {
-        // Experimental number that caused stack overflow on local machine. A
-        // better limit creation logic would be nice.
-        if self.execution_context_stack.len() > 3500 {
+        // Guard against a native stack overflow by measuring *actual* stack use from the
+        // outermost JS entry via a stack-pointer proxy (the address of a local). Portable to
+        // native and wasm (the shadow stack), unlike OS stack introspection, and unlike a
+        // fixed execution-context count — a re-entrant host callback such as DOM event
+        // dispatch burns far more native stack per level than a plain JS call, so a count
+        // alone either overflows (set too high, as the old 3500 did) or caps shallow (too
+        // low). The budget comes from the host (see `AgentOptions::stack_limit_bytes`); a
+        // high context count is kept as a secondary sanity cap.
+        const DEFAULT_STACK_LIMIT_BYTES: usize = 768 * 1024;
+        let anchor = 0u8;
+        let here = core::hint::black_box(&anchor) as *const u8 as usize;
+        let limit = if self.options.stack_limit_bytes != 0 {
+            self.options.stack_limit_bytes
+        } else {
+            DEFAULT_STACK_LIMIT_BYTES
+        };
+        let over_stack = self.stack_base != 0 && self.stack_base.abs_diff(here) > limit;
+        if over_stack || self.execution_context_stack.len() > 3500 {
             Err(self.throw_exception_with_static_message(
                 ExceptionType::RangeError,
                 "Maximum call stack size exceeded",
@@ -1301,6 +1330,12 @@ impl Agent {
     }
 
     pub(crate) fn push_execution_context(&mut self, context: ExecutionContext) {
+        if self.execution_context_stack.is_empty() {
+            // Outermost JS entry: anchor the deep-recursion guard's stack-pointer proxy at
+            // the top of this run's JS stack so [`check_call_depth`] measures growth from here.
+            let anchor = 0u8;
+            self.stack_base = core::hint::black_box(&anchor) as *const u8 as usize;
+        }
         self.execution_context_stack.push(context);
     }
 
@@ -1691,6 +1726,7 @@ impl HeapMarkAndSweep for Agent {
                 kept_alive: _,
             private_names_counter: _,
             module_async_evaluation_count: _,
+            stack_base: _,
         } = self;
 
         execution_context_stack.iter().for_each(|ctx| {
@@ -1742,6 +1778,7 @@ impl HeapMarkAndSweep for Agent {
                 kept_alive: _,
             private_names_counter: _,
             module_async_evaluation_count: _,
+            stack_base: _,
         } = self;
 
         execution_context_stack
