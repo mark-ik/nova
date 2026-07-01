@@ -12,8 +12,8 @@ use crate::{
         PromiseHeapData, PromiseReactionHandler, PromiseResolvingFunctionHeapData,
         PromiseResolvingFunctionType, PromiseState, PropertyKey, ProtoIntrinsics, Realm, String,
         Value, array_create, builders::BuiltinFunctionBuilder, call, call_function, get,
-        get_iterator, inner_promise_then, is_callable, is_constructor, iterator_close_with_error,
-        iterator_step_value, ordinary_create_from_constructor,
+        get_iterator, inner_promise_then, invoke, is_callable, is_constructor,
+        iterator_close_with_error, iterator_step_value, ordinary_create_from_constructor,
     },
     engine::{Bindable, GcScope, NoGcScope, Scopable, Scoped, bindable_handle},
     heap::{
@@ -1012,6 +1012,29 @@ fn perform_promise_race<'gc>(
     let next_method = next_method.scope(agent, gc.nogc());
     let promise = result_capability.promise.scope(agent, gc.nogc());
 
+    // The result capability's shared resolve/reject functions (spec NewPromiseCapability),
+    // created once and passed to each element's own observable `then`. Invoking the real
+    // `then` method (rather than internal reaction wiring) is what lets an overridden or
+    // throwing `then` run and abort the iteration via IteratorClose — without it, an
+    // infinite iterable looped forever because nothing ever threw.
+    let shared_capability = PromiseCapability::from_promise(promise.get(agent), true);
+    let resolve_function = agent
+        .heap
+        .create(PromiseResolvingFunctionHeapData {
+            object_index: None,
+            promise_capability: shared_capability.clone(),
+            resolve_type: PromiseResolvingFunctionType::Resolve,
+        })
+        .scope(agent, gc.nogc());
+    let reject_function = agent
+        .heap
+        .create(PromiseResolvingFunctionHeapData {
+            object_index: None,
+            promise_capability: shared_capability,
+            resolve_type: PromiseResolvingFunctionType::Reject,
+        })
+        .scope(agent, gc.nogc());
+
     loop {
         let iterator_record = IteratorRecord {
             iterator: iterator.get(agent),
@@ -1019,15 +1042,18 @@ fn perform_promise_race<'gc>(
         }
         .bind(gc.nogc());
 
+        // a. Let next be ? IteratorStepValue(iteratorRecord).
         let next = iterator_step_value(agent, iterator_record.unbind(), gc.reborrow())
             .unbind()?
             .bind(gc.nogc());
 
+        // b. If next is done, set iteratorRecord.[[Done]] and return resultCapability.[[Promise]].
         let Some(next) = next else {
             *iterator_done = true;
             return Ok(promise.get(agent));
         };
 
+        // c. Let nextPromise be ? Call(promiseResolve, constructor, « next »).
         let call_result = call_function(
             agent,
             promise_resolve.get(agent),
@@ -1043,19 +1069,28 @@ fn perform_promise_race<'gc>(
             _ => Promise::new_resolved(agent, call_result),
         };
 
-        let promise_capability = PromiseCapability {
-            promise: promise.get(agent).bind(gc.nogc()),
-            must_be_unresolved: true,
-        };
-
-        inner_promise_then(
+        // d. Let result be Completion(Invoke(nextPromise, "then",
+        //    « resultCapability.[[Resolve]], resultCapability.[[Reject]] »)).
+        let mut then_args: [Value; 2] = [
+            resolve_function.get(agent).into(),
+            reject_function.get(agent).into(),
+        ];
+        let then_result = invoke(
             agent,
-            next_promise.unbind(),
-            PromiseReactionHandler::Empty,
-            PromiseReactionHandler::Empty,
-            Some(promise_capability),
-            gc.nogc(),
+            Value::Promise(next_promise).unbind(),
+            BUILTIN_STRING_MEMORY.then.into(),
+            Some(ArgumentsList::from_mut_slice(&mut then_args)),
+            gc.reborrow(),
         );
+
+        // e. IfAbruptCloseIterator(result, iteratorRecord).
+        if let Err(err) = then_result {
+            // IteratorClose sets iteratorRecord.[[Done]]; mark it so the caller's own
+            // abrupt-close wrapper does not close (and call `return`) a second time.
+            *iterator_done = true;
+            let iterator = iterator.get(agent);
+            return Err(iterator_close_with_error(agent, iterator.unbind(), err.unbind(), gc));
+        }
     }
 }
 
