@@ -1661,7 +1661,7 @@ impl WaitAsyncJob {
             None => {
                 waiter_record.set_result(WaitResult::Ok);
                 WaitResult::Ok
-            },
+            }
         };
 
         let promise = self.0.promise_to_resolve.take(agent).bind(gc);
