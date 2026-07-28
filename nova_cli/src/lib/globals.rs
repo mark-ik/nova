@@ -324,6 +324,7 @@ pub fn initialize_global_object_with_internals(agent: &mut Agent, global: Object
                     print_internals: false,
                     // Always allow children to block.
                     no_block: false,
+                    stack_limit_bytes: 0,
                 },
                 child_hooks,
             );
