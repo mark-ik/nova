@@ -46,6 +46,14 @@ impl Builtin for Uint8ArrayConstructor {
 impl BuiltinIntrinsicConstructor for Uint8ArrayConstructor {
     const INDEX: IntrinsicConstructorIndexes = IntrinsicConstructorIndexes::Uint8Array;
 }
+struct Uint8ArrayFromHex;
+impl Builtin for Uint8ArrayFromHex {
+    const NAME: String<'static> = BUILTIN_STRING_MEMORY.fromHex;
+
+    const LENGTH: u8 = 1;
+
+    const BEHAVIOUR: Behaviour = Behaviour::Regular(TypedArrayConstructors::uint8_array_from_hex);
+}
 struct Uint8ClampedArrayConstructor;
 impl Builtin for Uint8ClampedArrayConstructor {
     const NAME: String<'static> = BUILTIN_STRING_MEMORY.Uint8ClampedArray;
@@ -191,6 +199,64 @@ impl TypedArrayConstructors {
         typed_array_constructor::<u8>(agent, arguments, new_target, gc)
     }
 
+    /// ### [23.3.1.2 Uint8Array.fromHex ( string )](https://tc39.es/ecma262/2026/multipage/indexed-collections.html#sec-uint8array.fromhex)
+    fn uint8_array_from_hex<'gc>(
+        agent: &mut Agent,
+        _this_value: Value,
+        arguments: ArgumentsList,
+        mut gc: GcScope<'gc, '_>,
+    ) -> JsResult<'gc, Value<'gc>> {
+        // 1. If string is not a String, throw a TypeError exception.
+        let Ok(string) = String::try_from(arguments.get(0).bind(gc.nogc())) else {
+            return Err(agent.throw_exception_with_static_message(
+                ExceptionType::TypeError,
+                "Uint8Array.fromHex requires a string",
+                gc.into_nogc(),
+            ));
+        };
+
+        // 2. Let result be FromHex(string).
+        let length = string.utf16_len(agent);
+        if length % 2 != 0 {
+            return Err(agent.throw_exception_with_static_message(
+                ExceptionType::SyntaxError,
+                "Hex string must have an even length",
+                gc.into_nogc(),
+            ));
+        }
+
+        let mut bytes = Vec::with_capacity(length / 2);
+        for read in (0..length).step_by(2) {
+            let Some(high) = decode_hex_digit(string.char_code_at(agent, read)) else {
+                return Err(agent.throw_exception_with_static_message(
+                    ExceptionType::SyntaxError,
+                    "Hex string contains an invalid character",
+                    gc.into_nogc(),
+                ));
+            };
+            let Some(low) = decode_hex_digit(string.char_code_at(agent, read + 1)) else {
+                return Err(agent.throw_exception_with_static_message(
+                    ExceptionType::SyntaxError,
+                    "Hex string contains an invalid character",
+                    gc.into_nogc(),
+                ));
+            };
+            bytes.push((high << 4) | low);
+        }
+
+        // 4. Let ta be AllocateTypedArray("Uint8Array", %Uint8Array%,
+        //    "%Uint8Array.prototype%", resultLength).
+        let constructor = agent.current_realm_record().intrinsics().uint8_array();
+        let typed_array =
+            allocate_typed_array::<u8>(agent, constructor.into(), Some(bytes.len()), gc.reborrow())
+                .unbind()?
+                .bind(gc.nogc());
+
+        // 6-7. Copy the decoded bytes into the new typed array.
+        typed_array.as_mut_slice(agent).copy_from_slice(&bytes);
+        Ok(typed_array.unbind().bind(gc.into_nogc()).into())
+    }
+
     fn uint8_clamped_array_constructor<'gc>(
         agent: &mut Agent,
         _this_value: Value,
@@ -325,7 +391,8 @@ impl TypedArrayConstructors {
             .build();
 
         BuiltinFunctionBuilder::new_intrinsic_constructor::<Uint8ArrayConstructor>(agent, realm)
-            .with_property_capacity(2)
+            .with_property_capacity(3)
+            .with_builtin_function_property::<Uint8ArrayFromHex>()
             .with_prototype(typed_array_constructor)
             .with_property(|builder| {
                 builder
@@ -686,6 +753,15 @@ impl TypedArrayPrototypes {
             })
             .with_constructor_property(float64_array_constructor)
             .build();
+    }
+}
+
+fn decode_hex_digit(code_unit: wtf8::CodePoint) -> Option<u8> {
+    match code_unit.to_char()? {
+        digit @ '0'..='9' => Some(digit as u8 - b'0'),
+        digit @ 'a'..='f' => Some(digit as u8 - b'a' + 10),
+        digit @ 'A'..='F' => Some(digit as u8 - b'A' + 10),
+        _ => None,
     }
 }
 

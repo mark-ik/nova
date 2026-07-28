@@ -159,6 +159,7 @@ from
 fromCharCode
 fromCodePoint
 fromEntries
+#[cfg(feature = "array-buffer")]fromHex
 #[cfg(feature = "math")]fround
 fulfilled
 function
