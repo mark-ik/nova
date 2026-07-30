@@ -1,19 +1,23 @@
-# Nova JavaScript engine
+# Vano
 
-Nova is a [JavaScript] engine focused on being lightweight, modular, and easy to
-embed. The engine's architecture is built close to the ECMAScript specification
-in structure with the implementation relying on idiomatic Rust and data-oriented
-design over traditional JavaScript engine building strategies. Interpreter
-performance is also a goal, but not yet a high priority.
+Vano is [Merely Made]'s maintained fork of the [Nova JavaScript engine]. It is
+the data-oriented JavaScript engine used by [Genet], carrying the host-data,
+weak-liveness, Wasm64, scheduling, and conformance work needed by that browser
+engine while preserving Nova's arena-based architecture and upstream history.
+
+The engine is focused on being lightweight, modular, and easy to embed. Its
+architecture is built close to the ECMAScript specification in structure, with
+the implementation relying on idiomatic Rust and data-oriented design over
+traditional JavaScript engine building strategies. Interpreter performance is
+also a goal, but not yet a high priority.
 
 The engine is exposed as a library with an API for implementation in Rust
 projects which themselves must serve as a runtime for JavaScript code. The
 execution model is greatly inspired by [Kiesel] and [LibJS].
 
-The project's website can be found at [trynova.dev], where we blog about the
-project's progress and where we track our Test262 pass rate. The development
-discussion is in the progress of moving to [Zulip] but our old [Discord server]
-is also still available.
+The upstream project's website is [trynova.dev], with development discussion on
+[Zulip] and its older [Discord server]. Vano-specific work is tracked in the
+[Vano repository].
 
 ## Lightweight
 
@@ -151,8 +155,12 @@ at [the CONTRIBUTING.md][Contributing].
 [JavaScript]: https://tc39.es/ecma262
 [Kiesel]: https://codeberg.org/kiesel-js/kiesel
 [LibJS]: https://github.com/LadybirdBrowser/ladybird/tree/master/Libraries/LibJS
-[Architecture]: https://github.com/trynova/nova/blob/main/ARCHITECTURE.md
-[Contributing]: https://github.com/trynova/nova/blob/main/CONTRIBUTING.md
+[Architecture]: ARCHITECTURE.md
+[Contributing]: CONTRIBUTING.md
+[Genet]: https://github.com/merely-made/genet
+[Merely Made]: https://github.com/merely-made
+[Nova JavaScript engine]: https://github.com/trynova/nova
+[Vano repository]: https://github.com/merely-made/vano
 [trynova.dev]: https://trynova.dev/
 [Out the cave, off the cliff — data-oriented design in Nova JavaScript engine]: https://www.youtube.com/watch?v=QuJRKhySp-0
 [Nova JavaScript Engine - Exploring a Data-Oriented Engine Design @ Web Engines Hackfest 2024]: https://www.youtube.com/watch?v=5olgPdqKZ84

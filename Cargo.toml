@@ -7,8 +7,8 @@ exclude = ["nova_lint"]
 edition = "2024"
 version = "1.0.0"
 license = "MPL-2.0"
-homepage = "https://trynova.dev/"
-repository = "https://github.com/trynova/nova/"
+homepage = "https://github.com/merely-made/vano"
+repository = "https://github.com/merely-made/vano"
 readme = "README.md"
 keywords = ["javascript", "typescript", "interpreter"]
 categories = ["development-tools"]
@@ -22,8 +22,8 @@ console = "=0.16.3"
 ctrlc = "=3.5.2"
 ecmascript_atomics = { path = "support/ecmascript_atomics", version = "=0.2.3" }
 fast-float = "=0.2.0"
-# serval fork: upstream now also lands on 0.17.1, but pins it exactly. We keep a
-# caret so the serval workspace can unify on whatever hashbrown boa floors at
+# Genet fork: upstream now also lands on 0.17.1, but pins it exactly. We keep a
+# caret so the Genet workspace can unify on whatever hashbrown Boa floors at
 # (currently 0.17.1); an `=` pin here would break that unification the moment
 # boa moves. Nova's `=` pins are a uniform reproducibility style, not a
 # hashbrown-specific constraint.
@@ -48,9 +48,9 @@ oxc_span = "=0.124.0"
 oxc_syntax = "=0.124.0"
 rand = "=0.10.1"
 regex = "=1.12.3"
-# serval fork: Nova's RegExp matcher uses regress (the ECMAScript-spec backtracking
+# Genet fork: Nova's RegExp matcher uses regress (the ECMAScript-spec backtracking
 # engine) instead of the `regex` crate, which cannot do lookahead/lookbehind/
-# backreferences. Pinned to the version boa uses in the serval workspace so the
+# backreferences. Pinned to the version Boa uses in the Genet workspace so the
 # ecosystem shares one regress.
 regress = { version = "0.11.1", features = ["utf16"] }
 ryu-js = "=1.0.2"

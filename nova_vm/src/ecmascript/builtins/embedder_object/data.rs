@@ -10,7 +10,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct EmbedderObjectHeapData<'a> {
     pub(crate) backing_object: Option<OrdinaryObject<'a>>,
-    /// Embedder-provided native data. For serval this carries a `NodeId` (or a
+    /// Embedder-provided native data. For Genet this carries a `NodeId` (or a
     /// handle into the embedder's side-table) — enough to bridge a JS reflector
     /// back to the host DOM arena. A plain integer: nothing to trace, so the GC
     /// mark/sweep ignore it.

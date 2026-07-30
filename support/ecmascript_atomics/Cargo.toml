@@ -34,7 +34,7 @@ resolver = "2"
 
 [features]
 alloc = []
-# Serval's first wasm64 content worker is deliberately single-threaded and does
+# Genet's first wasm64 content worker is deliberately single-threaded and does
 # not expose SharedArrayBuffer or Atomics. This backend preserves ordinary
 # ArrayBuffer/TypedArray storage without pretending to implement ECMAScript's
 # racy shared-memory model.

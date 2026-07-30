@@ -1,7 +1,7 @@
 [package]
 name = "nova_cli"
-repository = "https://github.com/trynova/nova/tree/main/nova_cli"
-description = "Nova Command Line Interface"
+repository = "https://github.com/merely-made/vano/tree/main/nova_cli"
+description = "Command-line interface for the Vano JavaScript engine"
 default-run = "nova_cli"
 version.workspace = true
 authors.workspace = true

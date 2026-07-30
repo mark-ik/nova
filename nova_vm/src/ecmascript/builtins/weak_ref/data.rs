@@ -53,7 +53,7 @@ impl HeapMarkAndSweep for WeakRefHeapData<'static> {
         // (not marked, because [[KeptAlive]] was clear), null it so `Deref`
         // observes the death; otherwise shift its index. Using the plain
         // `sweep_values` here would shift a dangling index for a collected
-        // target. (serval reflector liveness, G1.)
+        // target. (Genet reflector liveness, G1.)
         if let Some(target) = value.take() {
             *value = target.sweep_weak_reference(compactions);
         }

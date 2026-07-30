@@ -1,11 +1,11 @@
 [package]
 name = "nova_lint"
-repository = "https://github.com/trynova/nova/tree/main/nova_lint"
+repository = "https://github.com/merely-made/vano/tree/main/nova_lint"
 description = "A collection of custom lints to ease the development and maintenance of the Nova project."
 edition = "2024"
 version = "0.1.0"
 license = "MPL-2.0"
-homepage = "https://trynova.dev"
+homepage = "https://github.com/merely-made/vano"
 authors = ["The Nova Team"]
 publish = false
 

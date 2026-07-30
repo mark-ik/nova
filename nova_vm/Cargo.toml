@@ -1,7 +1,7 @@
 [package]
 name = "nova_vm"
-repository = "https://github.com/trynova/nova/tree/main/nova_vm"
-description = "Nova Virtual Machine"
+repository = "https://github.com/merely-made/vano/tree/main/nova_vm"
+description = "Data-oriented JavaScript engine used by Genet"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -40,7 +40,7 @@ xsum = { workspace = true }
 temporal_rs = { workspace = true, optional = true }
 
 # Browser wasm uses JavaScript's crypto source. `ahash` omits its runtime RNG on
-# wasm, and the serval-side vendored sonic-rs does the same, so nothing pulls
+# wasm, and Genet's vendored sonic-rs does the same, so nothing pulls
 # getrandom 0.3 on wasm. Only `rand`'s getrandom 0.4 branch needs the JS backend.
 [target.'cfg(target_family = "wasm")'.dependencies]
 ahash = { workspace = true, features = ["std"] }

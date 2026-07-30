@@ -364,7 +364,7 @@ Some more long-term prospects and/or wild ideas:
 
 1. Clone this repository with submodules:
 
-   `git clone --recurse-submodules git@github.com:trynova/nova.git`
+   `git clone --recurse-submodules https://github.com/merely-made/vano.git`
 
 2. Execute the test262 runner:
 

@@ -22,7 +22,7 @@ use crate::{
 
 /// Embedder objects let an embedder create JS objects carrying native data. Each
 /// is backed by an ordinary object (created lazily for property storage) while the
-/// embedder owns the native data — for serval, a `NodeId` bridging the JS reflector
+/// embedder owns the native data — for Genet, a `NodeId` bridging the JS reflector
 /// back to the host DOM arena.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -31,7 +31,7 @@ object_handle!(EmbedderObject);
 arena_vec_access!(EmbedderObject, 'a, EmbedderObjectHeapData, embedder_objects);
 
 impl<'a> EmbedderObject<'a> {
-    /// Create an embedder object carrying `embedder_data` (e.g. a serval `NodeId`),
+    /// Create an embedder object carrying `embedder_data` (e.g. a Genet `NodeId`),
     /// with no backing object yet (created lazily on first property access).
     pub fn create_with_data(agent: &mut Agent, embedder_data: u64) -> EmbedderObject<'static> {
         agent.heap.embedder_objects.push(EmbedderObjectHeapData {
@@ -47,7 +47,7 @@ impl<'a> EmbedderObject<'a> {
     }
 
     /// Create a [`WeakRef`] weakly targeting this embedder object, for host-side
-    /// liveness tracking (the serval reflector cache). The returned `WeakRef`
+    /// liveness tracking (the Genet reflector cache). The returned `WeakRef`
     /// must itself be rooted (e.g. in a `Global`); its target — this embedder
     /// object — is held *weakly*, so it can be collected once nothing else
     /// references it. This is the native/embedder entry point; the JS `WeakRef`
