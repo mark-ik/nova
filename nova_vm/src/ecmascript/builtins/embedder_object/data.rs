@@ -15,6 +15,8 @@ pub(crate) struct EmbedderObjectHeapData<'a> {
     /// back to the host DOM arena. A plain integer: nothing to trace, so the GC
     /// mark/sweep ignore it.
     pub(crate) embedder_data: u64,
+    /// Immutable embedder-defined owner identity; preserved by heap snapshots.
+    pub(crate) embedder_owner: u64,
 }
 
 impl HeapMarkAndSweep for EmbedderObjectHeapData<'static> {
@@ -22,6 +24,7 @@ impl HeapMarkAndSweep for EmbedderObjectHeapData<'static> {
         let Self {
             backing_object,
             embedder_data: _,
+            embedder_owner: _,
         } = self;
         backing_object.mark_values(queues);
     }
@@ -30,6 +33,7 @@ impl HeapMarkAndSweep for EmbedderObjectHeapData<'static> {
         let Self {
             backing_object,
             embedder_data: _,
+            embedder_owner: _,
         } = self;
         backing_object.sweep_values(compactions);
     }

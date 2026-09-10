@@ -100,13 +100,12 @@ impl<'sab> SharedArrayBuffer<'sab> {
         data_block: SharedDataBlock,
         gc: NoGcScope<'sab, '_>,
     ) -> Self {
-        agent
-            .heap
-            .create(SharedArrayBufferRecord {
-                backing_object: None,
-                data_block,
-            })
-            .bind(gc)
+        let buffer: Self = agent.heap.create(SharedArrayBufferRecord {
+            backing_object: None,
+            data_block,
+        });
+        buffer.create_backing_object(agent);
+        buffer.bind(gc)
     }
 
     /// Grows the SharedArrayBuffer.

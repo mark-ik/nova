@@ -56,10 +56,11 @@ impl<'ab> ArrayBuffer<'ab> {
     ) -> JsResult<'gc, ArrayBuffer<'gc>> {
         let data_block = create_byte_data_block(agent, byte_length as u64, gc)?;
         let block = data_block;
-        Ok(agent
+        let buffer: ArrayBuffer = agent
             .heap
-            .create(ArrayBufferHeapData::new_fixed_length(block))
-            .bind(gc))
+            .create(ArrayBufferHeapData::new_fixed_length(block));
+        buffer.create_backing_object(agent);
+        Ok(buffer.bind(gc))
     }
 
     /// Returns `true` if this ArrayBuffer is detached.

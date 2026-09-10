@@ -39,10 +39,12 @@ impl<'a> StringIterator<'a> {
         string: String,
         gc: NoGcScope<'a, '_>,
     ) -> StringIterator<'a> {
-        agent
+        let iterator: Self = agent
             .heap
             .create(StringIteratorHeapData::new(string))
-            .bind(gc)
+            .bind(gc);
+        iterator.create_backing_object(agent);
+        iterator
     }
 
     pub(crate) fn is_completed(self, agent: &Agent) -> bool {

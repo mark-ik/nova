@@ -36,12 +36,16 @@ arena_vec_access!(MapIterator, 'a, MapIteratorHeapData, map_iterators);
 
 impl MapIterator<'_> {
     pub(crate) fn from_map(agent: &mut Agent, map: Map, kind: CollectionIteratorKind) -> Self {
-        agent.heap.create(MapIteratorHeapData {
-            object_index: None,
-            map: Some(map.unbind()),
-            next_index: 0,
-            kind,
-        })
+        {
+            let created: MapIterator = agent.heap.create(MapIteratorHeapData {
+                object_index: None,
+                map: Some(map.unbind()),
+                next_index: 0,
+                kind,
+            });
+            created.create_backing_object(agent);
+            created
+        }
     }
 }
 

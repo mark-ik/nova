@@ -313,18 +313,6 @@ pub(crate) fn heap_gc(agent: &mut Agent, root_realms: &mut [Option<Realm<'static
             });
         }
 
-        if !queues.pending_ephemerons.is_empty() {
-            queues.pending_ephemerons.sort_by_key(|(key, _)| *key);
-            let new_values_to_mark = queues
-                .pending_ephemerons
-                .extract_if(.., |(key, _)| queues.bits.is_marked(key))
-                .map(|(_, value)| value)
-                .collect::<Vec<_>>();
-            for value in new_values_to_mark {
-                value.mark_values(&mut queues);
-            }
-        }
-
         if !queues.arrays.is_empty() {
             let mut array_marks: Box<[Array]> = queues.arrays.drain(..).collect();
             array_marks.sort();
@@ -1217,6 +1205,21 @@ pub(crate) fn heap_gc(agent: &mut Agent, root_realms: &mut [Option<Realm<'static
                     k2pow32.keys.get(index).mark_values(&mut queues)
                 }
             });
+        }
+        // Resolve ephemerons after every strong marking queue in this pass.
+        // A key may become marked by the last queue; checking earlier can leave
+        // its value pending when is_empty() (which ignores unresolved ephemerons)
+        // terminates marking. Enqueued values force another pass to a fixed point.
+        if !queues.pending_ephemerons.is_empty() {
+            queues.pending_ephemerons.sort_by_key(|(key, _)| *key);
+            let new_values_to_mark = queues
+                .pending_ephemerons
+                .extract_if(.., |(key, _)| queues.bits.is_marked(key))
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>();
+            for value in new_values_to_mark {
+                value.mark_values(&mut queues);
+            }
         }
     }
 
@@ -2139,4 +2142,66 @@ fn test_heap_gc() {
         "Global #1: {:#?}",
         agent.heap.globals.borrow().last().unwrap()
     );
+}
+
+#[test]
+#[cfg(feature = "weak-refs")]
+fn ephemeron_value_survives_a_key_marked_in_the_final_queue() {
+    use crate::{
+        ecmascript::{
+            AgentOptions, DefaultHostHooks, SymbolHeapData, Value, WeakKey, WeakMapRecord,
+        },
+        engine::HeapRootData,
+        heap::CreateHeapData,
+    };
+
+    // No realm graph or key prototype can enqueue an incidental extra pass.
+    // Descriptionless symbols enqueue no children when marked. WeakMaps have
+    // no backing objects until one is requested, which this fixture never does.
+    let mut agent = Agent::new(AgentOptions::default(), &DefaultHostHooks);
+    let first_key: Symbol = agent.heap.create(SymbolHeapData::default());
+    let second_key: Symbol = agent.heap.create(SymbolHeapData::default());
+    let first_map: WeakMap = agent.heap.create(WeakMapRecord::default());
+    let second_map: WeakMap = agent.heap.create(WeakMapRecord::default());
+    let payload = OrdinaryObject::create_object(&mut agent, None, &[]).unwrap();
+    first_map.set(
+        &mut agent,
+        WeakKey::Symbol(first_key),
+        Value::Symbol(second_key),
+    );
+    second_map.set(
+        &mut agent,
+        WeakKey::Symbol(second_key),
+        Value::from(payload),
+    );
+    let key_root = agent.heap.globals.borrow().len();
+    agent.heap.globals.borrow_mut().extend([
+        HeapRootData::Symbol(first_key),
+        HeapRootData::WeakMap(first_map),
+        HeapRootData::WeakMap(second_map),
+    ]);
+    let (mut gc, mut scope) = unsafe { GcScope::create_root() };
+    let mut gc = GcScope::new(&mut gc, &mut scope);
+
+    // Pass one visits symbols before WeakMaps: first_map schedules second_key,
+    // while second_map leaves its value pending. Pass two must revisit that
+    // pending value AFTER marking second_key, even with no other queued work.
+    heap_gc(&mut agent, &mut [], gc.reborrow());
+    assert_eq!(
+        agent.heap.objects.len(),
+        1,
+        "reachable ephemeron value was swept"
+    );
+    assert_eq!(agent.heap.weak_maps.len(), 2);
+
+    // The maps themselves are still rooted. Removing the only strong key must
+    // nevertheless release the entire chain, so this is not strong-map tracing.
+    agent.heap.globals.borrow_mut()[key_root] = HeapRootData::Empty;
+    heap_gc(&mut agent, &mut [], gc.reborrow());
+    assert_eq!(
+        agent.heap.objects.len(),
+        0,
+        "dead-key ephemeron retained its value"
+    );
+    assert_eq!(agent.heap.weak_maps.len(), 2);
 }

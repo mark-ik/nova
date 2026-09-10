@@ -4,6 +4,7 @@
 
 //! ### [27.2.1.1 PromiseCapability Records](https://tc39.es/ecma262/#sec-promisecapability-records)
 
+use crate::ecmascript::InternalSlots;
 use crate::{
     ecmascript::{
         Agent, BUILTIN_STRING_MEMORY, ExceptionType, Function, JsResult, Object, Promise,
@@ -47,7 +48,15 @@ impl<'a> PromiseCapability<'a> {
     /// NOTE: Our implementation doesn't take C as a parameter, since we don't
     /// yet support promise subclassing.
     pub fn new(agent: &mut Agent, gc: NoGcScope<'a, '_>) -> Self {
-        Self::from_promise(agent.heap.create(PromiseHeapData::default()), true).bind(gc)
+        Self::from_promise(
+            {
+                let created: Promise = agent.heap.create(PromiseHeapData::default());
+                created.create_backing_object(agent);
+                created
+            },
+            true,
+        )
+        .bind(gc)
     }
 
     /// Recreate a PromiseCapability from its associated [`Promise`] and the

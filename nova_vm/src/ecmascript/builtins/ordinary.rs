@@ -1838,7 +1838,14 @@ fn ordinary_object_populate_with_intrinsics<'a>(
                 .make_intrinsic(agent)
                 .expect("Should perform GC here");
         }
-        object.internal_set_prototype(agent, Some(prototype));
+        // Materialize the chosen prototype even when it equals the current
+        // realm's intrinsic. An implicit prototype would change when a different
+        // realm later observes this object.
+        object
+            .get_or_create_backing_object(agent)
+            .internal_set_prototype(agent, Some(prototype));
+    } else {
+        object.get_or_create_backing_object(agent);
     }
 
     object
@@ -1908,9 +1915,8 @@ pub(crate) fn ordinary_populate_from_constructor<'gc>(
 /// Otherwise the intrinsic named by intrinsicDefaultProto is used for
 /// \[\[Prototype\]\].
 ///
-/// NOTE: In this implementation, the function returns None if the prototype it
-/// would otherwise return is the prototype that corresponds to
-/// `intrinsic_default_proto`.
+/// The result retains the concrete prototype, including intrinsic defaults.
+/// Omitting a default would lose its constructor realm on a cross-realm read.
 pub(crate) fn get_prototype_from_constructor<'a>(
     agent: &mut Agent,
     constructor: Function,
@@ -1921,7 +1927,7 @@ pub(crate) fn get_prototype_from_constructor<'a>(
     let mut function_realm = try_get_function_realm(agent, constructor, gc.nogc());
     // NOTE: %Constructor%.prototype is an immutable property; we can thus
     // check if we %Constructor% is the ProtoIntrinsic we expect and if it is,
-    // return None because we know %Constructor%.prototype corresponds to the
+    // return its concrete prototype because %Constructor%.prototype corresponds to the
     // ProtoIntrinsic.
     if let Some(function_realm) = function_realm {
         let intrinsic_constructor =
@@ -1930,7 +1936,13 @@ pub(crate) fn get_prototype_from_constructor<'a>(
             // The ProtoIntrinsic's constructor matches the constructor we're
             // being called with, so the constructor's prototype matches the
             // ProtoIntrinsic.
-            return Ok(None);
+            return Ok(Some(
+                agent
+                    .get_realm_record_by_id(function_realm)
+                    .intrinsics()
+                    .get_intrinsic_default_proto(intrinsic_default_proto)
+                    .bind(gc.into_nogc()),
+            ));
         }
     }
 
@@ -1977,14 +1989,19 @@ pub(crate) fn get_prototype_from_constructor<'a>(
         Err(_) => {
             // a. Let realm be ? GetFunctionRealm(constructor).
             // b. Set proto to realm's intrinsic object named intrinsicDefaultProto.
-            // Note: We signify using the default proto by returning None.
             // We only need to call the get_function_realm function if it would
             // throw an error.
             if function_realm.is_none() {
                 let err = get_function_realm(agent, constructor.unbind(), gc.nogc()).unwrap_err();
                 return Err(err.unbind());
             }
-            Ok(None)
+            Ok(Some(
+                agent
+                    .get_realm_record_by_id(function_realm.expect("function realm checked"))
+                    .intrinsics()
+                    .get_intrinsic_default_proto(intrinsic_default_proto)
+                    .bind(gc.into_nogc()),
+            ))
         }
         Ok(proto) => {
             // 4. Return proto.
@@ -1997,7 +2014,7 @@ pub(crate) fn get_prototype_from_constructor<'a>(
                     .intrinsics()
                     .get_intrinsic_default_proto(intrinsic_default_proto);
                 if proto == default_proto {
-                    return Ok(None);
+                    return Ok(Some(default_proto.bind(gc.into_nogc())));
                 }
             }
             Ok(Some(proto.unbind().bind(gc.into_nogc())))
@@ -2108,7 +2125,7 @@ pub(crate) fn try_get_prototype_from_constructor<'a>(
     let function_realm = try_get_function_realm(agent, constructor, gc);
     // NOTE: %Constructor%.prototype is an immutable property; we can thus
     // check if we %Constructor% is the ProtoIntrinsic we expect and if it is,
-    // return None because we know %Constructor%.prototype corresponds to the
+    // return its concrete prototype because %Constructor%.prototype corresponds to the
     // ProtoIntrinsic.
     if let Some(function_realm) = function_realm {
         let intrinsic_constructor =
@@ -2117,7 +2134,13 @@ pub(crate) fn try_get_prototype_from_constructor<'a>(
             // The ProtoIntrinsic's constructor matches the constructor we're
             // being called with, so the constructor's prototype matches the
             // ProtoIntrinsic.
-            return TryResult::Continue(None);
+            return TryResult::Continue(Some(
+                agent
+                    .get_realm_record_by_id(function_realm)
+                    .intrinsics()
+                    .get_intrinsic_default_proto(intrinsic_default_proto)
+                    .bind(gc),
+            ));
         }
     }
 
@@ -2138,14 +2161,19 @@ pub(crate) fn try_get_prototype_from_constructor<'a>(
         Err(_) => {
             // a. Let realm be ? GetFunctionRealm(constructor).
             // b. Set proto to realm's intrinsic object named intrinsicDefaultProto.
-            // Note: We signify using the default proto by returning None.
             // We only need to call the get_function_realm function if it would
             // throw an error.
             if function_realm.is_none() {
                 let err = get_function_realm(agent, constructor.unbind(), gc).unwrap_err();
                 return err.into();
             }
-            TryResult::Continue(None)
+            TryResult::Continue(Some(
+                agent
+                    .get_realm_record_by_id(function_realm.expect("function realm checked"))
+                    .intrinsics()
+                    .get_intrinsic_default_proto(intrinsic_default_proto)
+                    .bind(gc),
+            ))
         }
         Ok(proto) => {
             // 4. Return proto.
@@ -2158,7 +2186,7 @@ pub(crate) fn try_get_prototype_from_constructor<'a>(
                     .intrinsics()
                     .get_intrinsic_default_proto(intrinsic_default_proto);
                 if proto == default_proto {
-                    return TryResult::Continue(None);
+                    return TryResult::Continue(Some(default_proto.bind(gc)));
                 }
             }
             TryResult::Continue(Some(proto))

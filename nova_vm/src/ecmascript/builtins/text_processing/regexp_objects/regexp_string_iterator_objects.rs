@@ -37,7 +37,7 @@ pub(crate) fn create_reg_exp_string_iterator<'gc>(
 ) -> RegExpStringIterator<'gc> {
     // 1. Let iterator be OrdinaryObjectCreate(%RegExpStringIteratorPrototype%, « [[IteratingRegExp]], [[IteratedString]], [[Global]], [[Unicode]], [[Done]] »).
     // 7. Return iterator.
-    agent.heap.create(RegExpStringIteratorRecord {
+    let iterator: RegExpStringIterator = agent.heap.create(RegExpStringIteratorRecord {
         backing_object: None,
         // 2. Set iterator.[[IteratingRegExp]] to R.
         iterating_regexp: r.bind(gc),
@@ -49,7 +49,9 @@ pub(crate) fn create_reg_exp_string_iterator<'gc>(
         unicode: full_unicode,
         // 6. Set iterator.[[Done]] to false.
         done: false,
-    })
+    });
+    iterator.create_backing_object(agent);
+    iterator
 }
 
 /// ### [22.2.9 RegExp String Iterator Objects](https://tc39.es/ecma262/#sec-regexp-string-iterator-objects)

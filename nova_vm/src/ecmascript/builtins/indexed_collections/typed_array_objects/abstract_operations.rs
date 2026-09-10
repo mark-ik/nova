@@ -12,15 +12,15 @@ use crate::{
     ecmascript::{
         Agent, AnyArrayBuffer, AnyTypedArray, ArgumentsList, ArrayBuffer, ArrayBufferHeapData,
         DataBlock, ExceptionType, Function, GenericTypedArray, InternalSlots, JsResult, Number,
-        Numeric, Object, PropertyKey, SmallInteger, TryError, TryResult, TypedArray,
-        TypedArrayRecord, Value, Viewable, VoidArray, construct, create_byte_data_block, get,
-        get_prototype_from_constructor, get_value_from_buffer, is_fixed_length_array_buffer,
-        js_result_into_try, length_of_array_like, require_internal_slot_typed_array, set,
-        set_value_in_buffer, species_constructor, to_index, try_result_into_js,
-        try_species_constructor, try_to_index,
+        Numeric, Object, OrdinaryObject, PropertyKey, SmallInteger, TryError, TryResult,
+        TypedArray, TypedArrayRecord, Value, Viewable, VoidArray, construct,
+        create_byte_data_block, get, get_prototype_from_constructor, get_value_from_buffer,
+        is_fixed_length_array_buffer, js_result_into_try, length_of_array_like,
+        require_internal_slot_typed_array, set, set_value_in_buffer, species_constructor, to_index,
+        try_result_into_js, try_species_constructor, try_to_index,
     },
     engine::{Bindable, GcScope, NoGcScope, Scopable, Scoped, ScopedCollection, bindable_handle},
-    heap::CreateHeapData,
+    heap::{ArenaAccessMut, CreateHeapData},
 };
 
 #[repr(transparent)]
@@ -132,10 +132,10 @@ pub(crate) fn typed_array_create<'a, T: Viewable>(
     // 11. Return A.
     let a = TypedArrayRecord::default();
 
-    let a = agent.heap.create(a);
-
+    let a: GenericTypedArray<T> = agent.heap.create(a);
+    let backing = a.get_or_create_backing_object(agent);
     if prototype.is_some() {
-        a.internal_set_prototype(agent, prototype);
+        backing.internal_set_prototype(agent, prototype);
     }
 
     a
@@ -159,10 +159,10 @@ pub(crate) fn shared_typed_array_create<'a, T: Viewable>(
     // 11. Return A.
     let a = SharedTypedArrayRecord::default();
 
-    let a = agent.heap.create(a);
-
+    let a: GenericSharedTypedArray<T> = agent.heap.create(a);
+    let backing = a.get_or_create_backing_object(agent);
     if prototype.is_some() {
-        a.internal_set_prototype(agent, prototype);
+        backing.internal_set_prototype(agent, prototype);
     }
 
     a
@@ -1076,10 +1076,18 @@ pub(crate) fn typed_array_create_from_data_block<'a>(
     let element_size = exemplar.typed_array_element_size();
     let byte_length = data_block.len();
     let array_length = byte_length / element_size;
-    let ab = agent
+    let ab: ArrayBuffer = agent
         .heap
         .create(ArrayBufferHeapData::new_fixed_length(data_block));
+    ab.create_backing_object(agent);
+    let prototype = agent
+        .current_realm_record()
+        .intrinsics()
+        .get_intrinsic_default_proto(exemplar.intrinsic_default_constructor());
+    let backing =
+        OrdinaryObject::create_object(agent, Some(prototype), &[]).expect("Should perform GC here");
     let result: VoidArray = agent.heap.create(TypedArrayRecord::default());
+    result.get_mut(agent).object_index = Some(backing.unbind());
     // SAFETY: Initialising new TypedArrayRecord.
     unsafe { result.initialise_data(agent, ab, 0, Some((byte_length, array_length))) };
     // 5. Return result.

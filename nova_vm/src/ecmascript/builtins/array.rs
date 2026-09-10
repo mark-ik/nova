@@ -55,13 +55,15 @@ pub(crate) static ARRAY_INDEX_RANGE: RangeInclusive<i64> = 0..=(i64::pow(2, 32) 
 impl<'a> Array<'a> {
     /// Allocate a new Array in the Agent heap with 0 capacity.
     pub fn new(agent: &mut Agent, gc: NoGcScope<'a, '_>) -> Self {
-        agent
+        let array: Self = agent
             .heap
             .create(ArrayHeapData {
                 object_index: None,
                 elements: ElementsVector::EMPTY,
             })
-            .bind(gc)
+            .bind(gc);
+        array.create_backing_object(agent);
+        array
     }
 
     /// Get a reference to the next Array that will be allocated.
@@ -86,13 +88,15 @@ impl<'a> Array<'a> {
             .heap
             .elements
             .allocate_elements_with_length(capacity as usize)?;
-        Ok(agent
+        let array: Self = agent
             .heap
             .create(ArrayHeapData {
                 object_index: None,
                 elements,
             })
-            .bind(gc))
+            .bind(gc);
+        array.create_backing_object(agent);
+        Ok(array)
     }
 
     /// Push a Value into this Array.
@@ -268,7 +272,9 @@ impl<'a> Array<'a> {
             object_index: None,
             elements: cloned_elements,
         };
-        agent.heap.create(data)
+        let array: Self = agent.heap.create(data);
+        array.create_backing_object(agent);
+        array
     }
 
     #[inline]

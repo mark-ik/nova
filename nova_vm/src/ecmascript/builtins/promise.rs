@@ -57,26 +57,32 @@ arena_vec_access!(Promise, 'a, PromiseHeapData, promises);
 impl<'a> Promise<'a> {
     /// Create a new resolved Promise.
     pub(crate) fn new_resolved(agent: &mut Agent, value: Value<'a>) -> Self {
-        agent.heap.create(PromiseHeapData {
-            object_index: None,
-            promise_state: PromiseState::Fulfilled {
-                promise_result: value,
-            },
-        })
+        {
+            let created: Promise = agent.heap.create(PromiseHeapData {
+                object_index: None,
+                promise_state: PromiseState::Fulfilled {
+                    promise_result: value,
+                },
+            });
+            created.create_backing_object(agent);
+            created
+        }
     }
 
     /// Create a new rejected, unhandled Promise.
     pub(crate) fn new_rejected(agent: &mut Agent, error: Value, gc: NoGcScope<'a, '_>) -> Self {
-        agent
-            .heap
-            .create(PromiseHeapData {
+        {
+            let created: Promise = agent.heap.create(PromiseHeapData {
                 object_index: None,
                 promise_state: PromiseState::Rejected {
                     promise_result: error.unbind(),
                     is_handled: false,
                 },
-            })
-            .bind(gc)
+            });
+            created.create_backing_object(agent);
+            created
+        }
+        .bind(gc)
     }
 
     /// Get the result of a resolved Promise, or None if the Promise is not

@@ -31,8 +31,8 @@ use crate::ecmascript::{FinalizationRegistryCleanupJob, clear_kept_objects};
 use crate::ecmascript::{WaitAsyncJob, WaitAsyncTimeoutJob};
 use crate::{
     ecmascript::{
-        AbstractModuleMethods, Environment, ErrorHeapData, ExecutionContext, Function,
-        GraphLoadingStateRecord, HostDefined, ModuleRequest, Object, OrdinaryObject,
+        AbstractModuleMethods, Environment, Error, ErrorHeapData, ExecutionContext, Function,
+        GraphLoadingStateRecord, HostDefined, InternalSlots, ModuleRequest, Object, OrdinaryObject,
         PrivateEnvironment, PrivateName, Promise, PromiseReactionJob, PromiseResolveThenableJob,
         PropertyKey, PropertyLookupCache, Realm, RealmRecord, Reference, Referrer, ScriptOrModule,
         SourceCode, SourceTextModule, String, Symbol, Value, ValueRootRepr,
@@ -1198,9 +1198,11 @@ impl Agent {
         gc: NoGcScope<'a, '_>,
     ) -> Value<'a> {
         let message = String::from_static_str(self, message, gc).unbind();
-        self.heap
-            .create(ErrorHeapData::new(kind, Some(message), None))
-            .into()
+        let error: Error = self
+            .heap
+            .create(ErrorHeapData::new(kind, Some(message), None));
+        error.create_backing_object(self);
+        error.into()
     }
 
     #[must_use]
@@ -1235,11 +1237,11 @@ impl Agent {
         gc: NoGcScope<'a, '_>,
     ) -> JsError<'a> {
         let message = String::from_string(self, message, gc).unbind();
-        JsError(
-            self.heap
-                .create(ErrorHeapData::new(kind, Some(message), None))
-                .into(),
-        )
+        let error: Error = self
+            .heap
+            .create(ErrorHeapData::new(kind, Some(message), None));
+        error.create_backing_object(self);
+        JsError(error.into())
     }
 
     /// ### [5.2.3.2 Throw an Exception](https://tc39.es/ecma262/#sec-throw-an-exception)
@@ -1250,12 +1252,11 @@ impl Agent {
         message: String,
         gc: NoGcScope<'a, '_>,
     ) -> JsError<'a> {
-        JsError(
-            self.heap
-                .create(ErrorHeapData::new(kind, Some(message.unbind()), None))
-                .bind(gc)
-                .into(),
-        )
+        let error: Error = self
+            .heap
+            .create(ErrorHeapData::new(kind, Some(message.unbind()), None));
+        error.create_backing_object(self);
+        JsError(error.bind(gc).into())
     }
 
     /// ### [5.2.3.2 Throw an Exception](https://tc39.es/ecma262/#sec-throw-an-exception)
@@ -1313,6 +1314,20 @@ impl Agent {
         } else {
             Ok(())
         }
+    }
+
+    /// Returns the nearest authored ECMAScript caller's realm during a builtin.
+    ///
+    /// Native trampolines such as `Function.prototype.call` and `apply` have no
+    /// ECMAScript code and are skipped. An authored callback entered from a
+    /// native has its own code context and becomes the caller. This does not
+    /// model HTML's backup incumbent settings-object stack.
+    pub fn native_caller_realm<'gc>(&self, gc: NoGcScope<'gc, '_>) -> Option<Realm<'gc>> {
+        self.execution_context_stack
+            .iter()
+            .rev()
+            .find(|context| context.ecmascript_code.is_some())
+            .map(|context| context.realm.bind(gc))
     }
 
     /// Returns the realm of the previous execution context.

@@ -34,11 +34,27 @@ impl<'a> EmbedderObject<'a> {
     /// Create an embedder object carrying `embedder_data` (e.g. a Genet `NodeId`),
     /// with no backing object yet (created lazily on first property access).
     pub fn create_with_data(agent: &mut Agent, embedder_data: u64) -> EmbedderObject<'static> {
+        Self::create_with_owner(agent, embedder_data, 0)
+    }
+
+    /// Create native data with an immutable embedder-defined owner identity.
+    /// Owner zero preserves the legacy `create_with_data` behavior.
+    pub fn create_with_owner(
+        agent: &mut Agent,
+        embedder_data: u64,
+        embedder_owner: u64,
+    ) -> EmbedderObject<'static> {
         agent.heap.embedder_objects.push(EmbedderObjectHeapData {
             backing_object: None,
             embedder_data,
+            embedder_owner,
         });
         EmbedderObject(BaseIndex::last(&agent.heap.embedder_objects))
+    }
+
+    /// Read the immutable owner, independently of script-visible properties.
+    pub fn embedder_owner(self, agent: &Agent) -> u64 {
+        self.get(agent).embedder_owner
     }
 
     /// Read back the embedder-provided native data.

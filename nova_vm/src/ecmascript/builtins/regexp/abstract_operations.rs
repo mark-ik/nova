@@ -11,10 +11,10 @@ use wtf8::{CodePoint, Wtf8Buf};
 
 use crate::{
     ecmascript::{
-        Agent, ArgumentsList, Array, BUILTIN_STRING_MEMORY, ExceptionType, Function, JsResult,
-        Number, Object, PropertyKey, PropertyLookupCache, ProtoIntrinsics, RegExp, RegExpHeapData,
-        RegExpLastIndex, String, TryError, TryGetResult, Value, array_create, call_function,
-        handle_try_get_result, is_callable, ordinary_create_from_constructor,
+        Agent, ArgumentsList, Array, BUILTIN_STRING_MEMORY, ExceptionType, Function, InternalSlots,
+        JsResult, Number, Object, PropertyKey, PropertyLookupCache, ProtoIntrinsics, RegExp,
+        RegExpHeapData, RegExpLastIndex, String, TryError, TryGetResult, Value, array_create,
+        call_function, handle_try_get_result, is_callable, ordinary_create_from_constructor,
         ordinary_object_create_null, throw_set_error, to_length, to_string,
         try_create_data_property_or_throw, try_get, try_result_into_js, try_to_length, unwrap_try,
         unwrap_try_get_value,
@@ -38,7 +38,8 @@ pub(crate) fn reg_exp_create<'a>(
         Err(Value::from(f).scope(agent, gc.nogc()))
     });
     // 1. Let obj be ! RegExpAlloc(%RegExp%).
-    let obj = agent.heap.create(RegExpHeapData::default()).bind(gc.nogc());
+    let obj: RegExp = agent.heap.create(RegExpHeapData::default()).bind(gc.nogc());
+    obj.create_backing_object(agent);
     // 2. Return ? RegExpInitialize(obj, P, F).
     reg_exp_initialize(agent, obj.unbind(), p, f, gc)
 }
@@ -60,7 +61,9 @@ pub(crate) fn reg_exp_create_literal<'a>(
     // 1. Let obj be ! RegExpAlloc(%RegExp%).
     // 2. Return ? RegExpInitialize(obj, P, F).
     let f = f.unwrap_or(RegExpFlags::empty());
-    agent.heap.create(RegExpHeapData::new(agent, p, f)).bind(gc)
+    let obj: RegExp = agent.heap.create(RegExpHeapData::new(agent, p, f));
+    obj.create_backing_object(agent);
+    obj.bind(gc)
 }
 
 /// ### [22.2.3.2 RegExpAlloc ( newTarget )](https://tc39.es/ecma262/#sec-regexpalloc)
@@ -585,7 +588,10 @@ pub(crate) fn reg_exp_builtin_exec<'a>(
     // code-unit ranges, so `.index`/lastIndex/captures need no WTF-8 byte
     // conversion. (regress is the ECMAScript-spec backtracking engine; unlike
     // the `regex` crate it supports lookahead/lookbehind/backreferences.)
-    let units: Vec<u16> = s.as_wtf8_(&agent.heap.strings).to_ill_formed_utf16().collect();
+    let units: Vec<u16> = s
+        .as_wtf8_(&agent.heap.strings)
+        .to_ill_formed_utf16()
+        .collect();
     // 8. Let matcher be R.[[RegExpMatcher]]. 13.c. Let r be matcher(input, lastIndex).
     let m: Option<regress::Match> = {
         let r_data = r.get_direct_mut(&mut agent.heap.regexps);
@@ -644,7 +650,14 @@ pub(crate) fn reg_exp_builtin_exec<'a>(
     ));
     // 23. CreateDataPropertyOrThrow(A, "input", S).
     let input_key = String::from_static_str(agent, "input", gc).to_property_key();
-    unwrap_try(try_create_data_property_or_throw(agent, a, input_key, s.into(), None, gc));
+    unwrap_try(try_create_data_property_or_throw(
+        agent,
+        a,
+        input_key,
+        s.into(),
+        None,
+        gc,
+    ));
     // 30/31. groups is a null-proto object iff any capture group is named.
     let groups = if has_group_name {
         Some(ordinary_object_create_null(agent, gc))
@@ -685,7 +698,9 @@ pub(crate) fn reg_exp_builtin_exec<'a>(
                 None => Value::Undefined,
             };
             let key = String::from_str(agent, name, gc).to_property_key();
-            unwrap_try(try_create_data_property_or_throw(agent, groups, key, value, None, gc));
+            unwrap_try(try_create_data_property_or_throw(
+                agent, groups, key, value, None, gc,
+            ));
         }
     }
     // 32. CreateDataPropertyOrThrow(A, "groups", groups).
@@ -811,7 +826,7 @@ fn code_units_substring<'gc>(
             // is a valid WTF-8 CodePoint.
             Err(e) => {
                 buf.push(unsafe { CodePoint::from_u32_unchecked(e.unpaired_surrogate() as u32) })
-            },
+            }
         }
     }
     String::from_wtf8_buf(agent, buf, gc)
@@ -852,7 +867,10 @@ pub(crate) fn reg_exp_builtin_test<'a>(
         return Ok(false);
     }
     // Run regress over the string's UTF-16 code units (see reg_exp_builtin_exec).
-    let units: Vec<u16> = s.as_wtf8_(&agent.heap.strings).to_ill_formed_utf16().collect();
+    let units: Vec<u16> = s
+        .as_wtf8_(&agent.heap.strings)
+        .to_ill_formed_utf16()
+        .collect();
     let m: Option<regress::Match> = {
         let r_data = r.get_direct_mut(&mut agent.heap.regexps);
         // SAFETY: reg_exp_builtin_exec_prepare checks the matcher is set.
@@ -869,14 +887,17 @@ pub(crate) fn reg_exp_builtin_test<'a>(
     // so a sticky match off the start position is treated as no match.)
     match m {
         Some(m) if !(sticky && m.start() != last_index) => {
-            r_data.last_index =
-                if global || sticky { m.end().into() } else { RegExpLastIndex::ZERO };
+            r_data.last_index = if global || sticky {
+                m.end().into()
+            } else {
+                RegExpLastIndex::ZERO
+            };
             Ok(true)
-        },
+        }
         _ => {
             r_data.last_index = RegExpLastIndex::ZERO;
             Ok(false)
-        },
+        }
     }
 }
 

@@ -35,12 +35,16 @@ arena_vec_access!(SetIterator, 'a, SetIteratorHeapData, set_iterators);
 
 impl SetIterator<'_> {
     pub(crate) fn from_set(agent: &mut Agent, set: Set, kind: CollectionIteratorKind) -> Self {
-        agent.heap.create(SetIteratorHeapData {
-            object_index: None,
-            set: Some(set.unbind()),
-            next_index: 0,
-            kind,
-        })
+        {
+            let created: SetIterator = agent.heap.create(SetIteratorHeapData {
+                object_index: None,
+                set: Some(set.unbind()),
+                next_index: 0,
+                kind,
+            });
+            created.create_backing_object(agent);
+            created
+        }
     }
 }
 

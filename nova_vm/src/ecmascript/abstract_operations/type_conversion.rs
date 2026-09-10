@@ -14,6 +14,7 @@
 //! The BigInt type has no implicit conversions in the ECMAScript language;
 //! programmers must call BigInt explicitly to convert values from other types.
 
+use crate::ecmascript::InternalSlots;
 use std::convert::Infallible;
 
 use num_bigint::Sign;
@@ -1199,7 +1200,7 @@ pub(crate) fn to_object<'a>(
 ) -> JsResult<'a, Object<'a>> {
     let argument = argument.bind(gc);
     require_object_coercible(agent, argument, gc)?;
-    match argument {
+    let object: JsResult<Object> = match argument {
         Value::Undefined | Value::Null => unreachable!(),
         // Return a new Boolean object whose [[BooleanData]] internal slot is set to argument.
         Value::Boolean(bool) => Ok(agent
@@ -1269,8 +1270,11 @@ pub(crate) fn to_object<'a>(
                 data: PrimitiveObjectData::SmallBigInt(bigint),
             })
             .into()),
-        _ => Ok(Object::try_from(argument).unwrap()),
-    }
+        _ => return Ok(Object::try_from(argument).unwrap()),
+    };
+    let object = object?;
+    object.get_or_create_backing_object(agent);
+    Ok(object)
 }
 
 /// ### [7.1.19 ToPropertyKey ( argument )](https://tc39.es/ecma262/#sec-topropertykey)

@@ -3,18 +3,19 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #[cfg(feature = "set")]
+use crate::ecmascript::InternalSlots;
 use crate::heap::ArenaAccessSoA;
 use crate::{
     ecmascript::{
         Agent, ArgumentsList, BUILTIN_STRING_MEMORY, Behaviour, Builtin, BuiltinGetter,
         BuiltinIntrinsicConstructor, ExceptionType, Function, IteratorRecord, JsError, JsResult,
-        Object, OrdinaryObject, Promise, PromiseCapability, PromiseGroupElement, PromiseGroupRecord,
-        PromiseGroupType, PromiseHeapData, PromiseReactionHandler, PromiseReactionType,
-        PromiseResolvingFunctionHeapData,
-        PromiseResolvingFunctionType, PromiseState, PropertyKey, ProtoIntrinsics, Realm, String,
-        Value, array_create, builders::BuiltinFunctionBuilder, call, call_function, get,
-        get_iterator, inner_promise_then, invoke, is_callable, is_constructor,
-        iterator_close_with_error, iterator_step_value, ordinary_create_from_constructor,
+        Object, OrdinaryObject, Promise, PromiseCapability, PromiseGroupElement,
+        PromiseGroupRecord, PromiseGroupType, PromiseHeapData, PromiseReactionHandler,
+        PromiseReactionType, PromiseResolvingFunctionHeapData, PromiseResolvingFunctionType,
+        PromiseState, PropertyKey, ProtoIntrinsics, Realm, String, Value, array_create,
+        builders::BuiltinFunctionBuilder, call, call_function, get, get_iterator,
+        inner_promise_then, invoke, is_callable, is_constructor, iterator_close_with_error,
+        iterator_step_value, ordinary_create_from_constructor,
     },
     engine::{Bindable, GcScope, NoGcScope, Scopable, Scoped, bindable_handle},
     heap::{
@@ -565,13 +566,17 @@ impl PromiseConstructor {
             Err(err) => {
                 // a. Perform ? Call(promiseCapability.[[Reject]], undefined, « status.[[Value]] »).
                 // 7. Return promiseCapability.[[Promise]].
-                agent.heap.create(PromiseHeapData {
-                    object_index: None,
-                    promise_state: PromiseState::Rejected {
-                        promise_result: err.value(),
-                        is_handled: false,
-                    },
-                })
+                {
+                    let created: Promise = agent.heap.create(PromiseHeapData {
+                        object_index: None,
+                        promise_state: PromiseState::Rejected {
+                            promise_result: err.value(),
+                            is_handled: false,
+                        },
+                    });
+                    created.create_backing_object(agent);
+                    created
+                }
             }
             // 6. Else,
             Ok(result) => {
@@ -1019,7 +1024,12 @@ fn perform_promise_group<'gc>(
         if let Err(err) = then_result {
             *iterator_done = true;
             let iterator = iterator.get(agent);
-            return Err(iterator_close_with_error(agent, iterator.unbind(), err.unbind(), gc));
+            return Err(iterator_close_with_error(
+                agent,
+                iterator.unbind(),
+                err.unbind(),
+                gc,
+            ));
         }
 
         // o. Set index to index + 1.
@@ -1124,7 +1134,12 @@ fn perform_promise_race<'gc>(
             // abrupt-close wrapper does not close (and call `return`) a second time.
             *iterator_done = true;
             let iterator = iterator.get(agent);
-            return Err(iterator_close_with_error(agent, iterator.unbind(), err.unbind(), gc));
+            return Err(iterator_close_with_error(
+                agent,
+                iterator.unbind(),
+                err.unbind(),
+                gc,
+            ));
         }
     }
 }

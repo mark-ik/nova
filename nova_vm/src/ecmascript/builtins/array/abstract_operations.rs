@@ -37,25 +37,18 @@ pub(crate) fn array_create<'a>(
         ));
     }
     // 2. If proto is not present, set proto to %Array.prototype%.
-    let object_index = if let Some(proto) = proto {
-        if proto
-            == agent
-                .current_realm_record()
-                .intrinsics()
-                .array_prototype()
-                .into()
-        {
-            None
-        } else {
-            Some(
-                OrdinaryObject::create_object(agent, Some(proto), &[])
-                    .expect("Should perform GC here")
-                    .bind(gc),
-            )
-        }
-    } else {
-        None
-    };
+    let proto = proto.unwrap_or_else(|| {
+        agent
+            .current_realm_record()
+            .intrinsics()
+            .array_prototype()
+            .into()
+    });
+    let object_index = Some(
+        OrdinaryObject::create_object(agent, Some(proto), &[])
+            .expect("Should perform GC here")
+            .bind(gc),
+    );
     // 3. Let A be MakeBasicObject(« [[Prototype]], [[Extensible]] »).
     // 5. Set A.[[DefineOwnProperty]] as specified in 10.4.2.1.
     let mut elements = match agent.heap.elements.allocate_elements_with_length(capacity) {

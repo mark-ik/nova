@@ -32,12 +32,16 @@ impl<'a> ArrayIterator<'a> {
         array: Object,
         kind: CollectionIteratorKind,
     ) -> Self {
-        agent.heap.create(ArrayIteratorHeapData {
-            object_index: None,
-            array: Some(array.unbind()),
-            next_index: 0,
-            kind,
-        })
+        {
+            let created: ArrayIterator = agent.heap.create(ArrayIteratorHeapData {
+                object_index: None,
+                array: Some(array.unbind()),
+                next_index: 0,
+                kind,
+            });
+            created.create_backing_object(agent);
+            created
+        }
     }
 }
 
