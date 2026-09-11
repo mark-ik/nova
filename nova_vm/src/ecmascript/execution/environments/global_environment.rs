@@ -620,6 +620,17 @@ impl<'e> GlobalEnvironment<'e> {
         self.get(agent).global_this_value
     }
 
+    /// Replaces envRec.\[\[GlobalThisValue]].
+    ///
+    /// Not a specification operation: the host's `create_global_this_value`
+    /// hook runs while the realm is still being built, so an embedder whose
+    /// global `this` must be constructed with a usable agent has no way to
+    /// supply one there. See `Realm::set_global_this_value`, which is the
+    /// entry point for that and which also repairs the `globalThis` property.
+    pub(crate) fn set_this_binding(self, agent: &mut Agent, value: Object) {
+        self.get_mut(agent).global_this_value = value.unbind();
+    }
+
     /// ### [9.1.1.4.12 HasVarDeclaration ( N )](https://tc39.es/ecma262/#sec-hasvardeclaration)
     ///
     /// The HasVarDeclaration concrete method of a Global Environment Record

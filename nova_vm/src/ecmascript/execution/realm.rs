@@ -77,6 +77,50 @@ impl<'r> Realm<'r> {
         self.get(agent).global_object
     }
 
+    /// Replaces this realm's global `this` value.
+    ///
+    /// `create_global_this_value` runs while the realm is still being built —
+    /// before `SetRealmGlobalObject` and `SetDefaultGlobalBindings` — so an
+    /// embedder whose global `this` must be constructed with a usable agent
+    /// (an exotic forwarding object, for example) cannot supply one there.
+    /// This is the counterpart for that case: call it once the realm exists
+    /// and before any script runs in it.
+    ///
+    /// Besides the global environment's \[\[GlobalThisValue]], this redefines
+    /// the `globalThis` property of the global object, which
+    /// [`SetDefaultGlobalBindings`][spec] installed as a snapshot of the
+    /// original value.
+    ///
+    /// [spec]: https://tc39.es/ecma262/#sec-setdefaultglobalbindings
+    pub fn set_global_this_value(
+        self,
+        agent: &mut Agent,
+        global_this: Object,
+        mut gc: GcScope,
+    ) -> JsResult<'static, ()> {
+        let global_this = global_this.unbind();
+        let Some(global_env) = self.global_env(agent, gc.nogc()).map(Bindable::unbind) else {
+            return Ok(());
+        };
+        global_env.set_this_binding(agent, global_this);
+        let global = self.global_object(agent).unbind();
+        define_property_or_throw(
+            agent,
+            global,
+            PropertyKey::from(BUILTIN_STRING_MEMORY.globalThis),
+            PropertyDescriptor {
+                value: Some(global_this.into()),
+                writable: Some(true),
+                enumerable: Some(false),
+                configurable: Some(true),
+                ..Default::default()
+            },
+            gc.reborrow(),
+        )
+        .unbind()?;
+        Ok(())
+    }
+
     /// ### \[\[GlobalEnv]]
     pub(crate) fn global_env<'gc>(
         self,
