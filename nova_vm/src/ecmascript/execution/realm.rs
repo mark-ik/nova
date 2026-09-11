@@ -77,31 +77,55 @@ impl<'r> Realm<'r> {
         self.get(agent).global_object
     }
 
-    /// Replaces this realm's global `this` value.
+    /// Finishes this realm's global `this` initialization, installing
+    /// `global_this` as the global environment's \[\[GlobalThisValue]].
     ///
-    /// `create_global_this_value` runs while the realm is still being built —
-    /// before `SetRealmGlobalObject` and `SetDefaultGlobalBindings` — so an
-    /// embedder whose global `this` must be constructed with a usable agent
-    /// (an exotic forwarding object, for example) cannot supply one there.
-    /// This is the counterpart for that case: call it once the realm exists
-    /// and before any script runs in it.
+    /// Realm creation is in two halves for a host that needs this. The first is
+    /// the `create_global_this_value` hook, which runs while the realm is still
+    /// being built - before `SetRealmGlobalObject` and
+    /// `SetDefaultGlobalBindings` - so a host whose global `this` can only be
+    /// built with a usable agent, an exotic object whose traps call back into
+    /// the engine for example, has nothing to return there. This method is the
+    /// second half, and the host calls it as soon as the agent is usable.
     ///
-    /// Besides the global environment's \[\[GlobalThisValue]], this redefines
-    /// the `globalThis` property of the global object, which
-    /// [`SetDefaultGlobalBindings`][spec] installed as a snapshot of the
-    /// original value.
+    /// It is deliberately not a setter. The window closes the moment anything
+    /// could have observed the original value, and it closes for good: after
+    /// any code has run in this realm, and after one successful call. Outside
+    /// that window it returns `Err` and changes nothing.
+    ///
+    /// Within it, the global environment's \[\[GlobalThisValue]] is the only
+    /// live holder - `ResolveThisBinding` and `GetThisEnvironment` both end at
+    /// it - with one exception: the `globalThis` property that
+    /// [`SetDefaultGlobalBindings`][spec] wrote as a snapshot of the original
+    /// value, which this method redefines.
+    ///
+    /// The global *object* is untouched, which is what a forwarding global
+    /// `this` wants to forward to.
     ///
     /// [spec]: https://tc39.es/ecma262/#sec-setdefaultglobalbindings
-    pub fn set_global_this_value(
+    pub fn finish_global_this_initialization(
         self,
         agent: &mut Agent,
         global_this: Object,
         mut gc: GcScope,
     ) -> JsResult<'static, ()> {
+        if self.get(agent).global_this_fixed {
+            return Err(agent
+                .throw_exception_with_static_message(
+                    crate::ecmascript::ExceptionType::TypeError,
+                    concat!(
+                        "the global `this` value of this realm is already fixed: it can be ",
+                        "initialized only once, and only before any code runs in the realm",
+                    ),
+                    gc.into_nogc(),
+                )
+                .unbind());
+        }
         let global_this = global_this.unbind();
         let Some(global_env) = self.global_env(agent, gc.nogc()).map(Bindable::unbind) else {
             return Ok(());
         };
+        self.get_mut(agent).global_this_fixed = true;
         global_env.set_this_binding(agent, global_this);
         let global = self.global_object(agent).unbind();
         define_property_or_throw(
@@ -119,6 +143,13 @@ impl<'r> Realm<'r> {
         )
         .unbind()?;
         Ok(())
+    }
+
+    /// Records that code has run in this realm, fixing its global `this`.
+    ///
+    /// See [`Realm::finish_global_this_initialization`].
+    pub(crate) fn fix_global_this(self, agent: &mut Agent) {
+        self.get_mut(agent).global_this_fixed = true;
     }
 
     /// ### \[\[GlobalEnv]]
@@ -212,6 +243,13 @@ pub(crate) struct RealmRecord<'a> {
     /// Field reserved for use by hosts that need to associate additional
     /// information with a Realm Record.
     pub(crate) host_defined: Option<HostDefined>,
+
+    /// Whether this realm's global `this` value is fixed.
+    ///
+    /// Not a specification field. Set either by
+    /// [`Realm::finish_global_this_initialization`] or by the first time code
+    /// runs in this realm, whichever happens first.
+    pub(crate) global_this_fixed: bool,
 }
 
 unsafe impl Send for RealmRecord<'_> {}
@@ -234,6 +272,7 @@ impl HeapMarkAndSweep for RealmRecord<'static> {
             template_map: _,
             loaded_modules,
             host_defined: _,
+            global_this_fixed: _,
         } = self;
         intrinsics.mark_values(queues);
         global_env.mark_values(queues);
@@ -250,6 +289,7 @@ impl HeapMarkAndSweep for RealmRecord<'static> {
             template_map: _,
             loaded_modules,
             host_defined: _,
+            global_this_fixed: _,
         } = self;
         intrinsics.sweep_values(compactions);
         global_env.sweep_values(compactions);
@@ -283,6 +323,7 @@ pub(crate) fn create_realm<'gc>(agent: &mut Agent, gc: NoGcScope<'gc, '_>) -> Re
         // NOTE: These fields are implicitly empty.
         host_defined: None,
         loaded_modules: Default::default(),
+        global_this_fixed: false,
     };
 
     // 7. Return realmRec.

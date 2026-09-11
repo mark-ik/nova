@@ -625,8 +625,9 @@ impl<'e> GlobalEnvironment<'e> {
     /// Not a specification operation: the host's `create_global_this_value`
     /// hook runs while the realm is still being built, so an embedder whose
     /// global `this` must be constructed with a usable agent has no way to
-    /// supply one there. See `Realm::set_global_this_value`, which is the
-    /// entry point for that and which also repairs the `globalThis` property.
+    /// supply one there. See `Realm::finish_global_this_initialization`, which is the
+    /// entry point for that and which also repairs the `globalThis` property,
+    /// and which is what restricts when this may be called.
     pub(crate) fn set_this_binding(self, agent: &mut Agent, value: Object) {
         self.get_mut(agent).global_this_value = value.unbind();
     }

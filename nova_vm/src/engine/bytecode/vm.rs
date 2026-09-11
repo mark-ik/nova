@@ -216,6 +216,11 @@ impl Vm {
         arguments: Option<&mut [Value<'static>]>,
         gc: GcScope<'gc, '_>,
     ) -> ExecutionResult<'gc> {
+        // Code is about to run in this realm, so its global `this` can no
+        // longer be replaced: see `Realm::finish_global_this_initialization`.
+        let realm = agent.current_realm(gc.nogc()).unbind();
+        realm.fix_global_this(agent);
+
         let mut vm = Vm::new();
 
         if let Some(arguments) = arguments {
