@@ -1857,7 +1857,12 @@ impl<'a> InternalMethods<'a> for Proxy<'a> {
 /// language value) and handler (an ECMAScript language value) and returns
 /// either a normal completion containing a Proxy exotic object or a throw
 /// completion. It is used to specify the creation of new Proxy objects.
-pub(crate) fn proxy_create<'a>(
+/// Public for the embedder that needs a Proxy whose handler is an ordinary
+/// object rather than the `Proxy` constructor's own argument handling - a
+/// handler whose trap properties are accessors, for instance, resolves each
+/// trap at the moment it is used, which is how a host can hand out a proxy
+/// before the code implementing its behaviour exists.
+pub fn proxy_create<'a>(
     agent: &mut Agent,
     target: Value,
     handler: Value,
